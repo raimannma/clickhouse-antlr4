@@ -238,14 +238,26 @@ fn generate(jar: &Path, repo_root: &Path, out_dir: &Path) {
     patch_generated(out_dir);
 }
 
-/// Work around a known antlr4rust codegen quirk: when the parser grammar
-/// file is named `FooParser.g4`, some labeled-alternative impl blocks are
-/// emitted with the trait name `FooParserParserContext` (double "Parser")
-/// while the trait itself is defined as `FooParserContext`. Rewrite the
-/// spurious doubled token in the generated sources.
+/// Work around two antlr4rust codegen quirks:
+///
+/// 1. When the parser grammar file is named `FooParser.g4`, some
+///    labeled-alternative impl blocks are emitted with the trait name
+///    `FooParserParserContext` (double "Parser") while the trait itself is
+///    defined as `FooParserContext`.
+/// 2. The `VOCABULARY` static is emitted as `Box<dyn Vocabulary>`. That works
+///    with stock `lazy_static` (whose `Lazy<T>` wraps `std::sync::Once<T>` and
+///    only requires `T: Sync`), but breaks for any downstream workspace that
+///    activates `lazy_static/spin_no_std` — `spin::Once<T>: Sync` requires
+///    `T: Send + Sync`, and `dyn Vocabulary` is `Sync` but not `Send`. Add an
+///    explicit `+ Send` bound so the generated code compiles under either
+///    `lazy_static` flavor.
 fn patch_generated(out_dir: &Path) {
     const TARGETS: &[(&str, &str)] = &[
         ("ClickHouseParserParserContext", "ClickHouseParserContext"),
+        (
+            "static ref VOCABULARY: Box<dyn Vocabulary> =",
+            "static ref VOCABULARY: Box<dyn Vocabulary + Send> =",
+        ),
     ];
     for f in GENERATED_FILES {
         let p = out_dir.join(f);
