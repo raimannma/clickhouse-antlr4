@@ -1,0 +1,1 @@
+ALTER USER alice RENAME TO al SETTINGS max_memory_usage = 10000000000

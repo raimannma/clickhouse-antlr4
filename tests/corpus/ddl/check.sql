@@ -1,0 +1,1 @@
+CHECK TABLE t PART 'all_1_1_0'

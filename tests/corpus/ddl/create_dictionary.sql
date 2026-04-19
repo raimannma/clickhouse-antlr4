@@ -1,0 +1,7 @@
+CREATE DICTIONARY dict (
+    id UInt64,
+    name String DEFAULT 'n/a'
+) PRIMARY KEY id
+  SOURCE(MYSQL(HOST 'localhost' PORT 3306 USER 'u' PASSWORD 'p' DB 'db' TABLE 'tbl'))
+  LIFETIME(MIN 300 MAX 600)
+  LAYOUT(HASHED())

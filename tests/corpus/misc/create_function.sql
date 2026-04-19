@@ -1,0 +1,1 @@
+CREATE FUNCTION IF NOT EXISTS add_one AS (x) -> x + 1

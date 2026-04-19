@@ -1,0 +1,1 @@
+EXPLAIN PLAN SETTINGS max_threads=2 SELECT count() FROM t

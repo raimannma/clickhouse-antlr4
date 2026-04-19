@@ -1,0 +1,1 @@
+EXTRACT(YEAR FROM date_col) + EXTRACT(MONTH FROM date_col)

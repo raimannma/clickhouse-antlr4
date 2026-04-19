@@ -1,0 +1,1 @@
+SHOW PROCESSLIST WHERE elapsed > 1.0

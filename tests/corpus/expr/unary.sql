@@ -1,0 +1,1 @@
+-x + -(a + b) - -c + NOT x AND NOT (y OR z)

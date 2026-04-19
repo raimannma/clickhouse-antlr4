@@ -1,0 +1,17 @@
+[package]
+name = "clickhouse-sql-parser"
+version = "0.1.0"
+edition = "2024"
+description = "ANTLR4-generated Rust parser/validator for ClickHouse SQL"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+antlr-rust = "=0.3.0-beta"
+
+[lib]
+name = "clickhouse_sql_parser"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ch-sql-validate"
+path = "src/main.rs"

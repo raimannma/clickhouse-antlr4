@@ -1,0 +1,1 @@
+WATCH db.live_view EVENTS LIMIT 100

@@ -1,0 +1,1 @@
+SELECT * FROM a LEFT JOIN b ON a.id = b.id RIGHT ANTI JOIN c USING (id) FULL OUTER JOIN d ON a.x = d.x CROSS JOIN e

@@ -1,0 +1,1 @@
+INSERT INTO t FROM INFILE '/data.csv.gz' COMPRESSION 'gzip' FORMAT CSV

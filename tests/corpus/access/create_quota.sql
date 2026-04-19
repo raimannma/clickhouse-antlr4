@@ -1,0 +1,1 @@
+CREATE QUOTA q1 FOR INTERVAL 1 HOUR MAX queries 100 MAX errors 5 TO analyst

@@ -1,0 +1,1 @@
+CREATE TABLE copy_t ENGINE = MergeTree() ORDER BY id AS SELECT * FROM src

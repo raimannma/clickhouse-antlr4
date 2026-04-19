@@ -1,0 +1,1 @@
+KILL MUTATION ON CLUSTER c WHERE mutation_id = '0001'

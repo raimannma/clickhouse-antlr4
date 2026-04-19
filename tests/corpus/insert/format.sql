@@ -1,0 +1,1 @@
+INSERT INTO t SETTINGS max_insert_block_size=4096 FORMAT CSV

@@ -1,0 +1,1 @@
+ALTER TABLE t MODIFY ORDER BY (a, b, c)

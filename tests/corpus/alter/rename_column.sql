@@ -1,0 +1,1 @@
+ALTER TABLE t RENAME COLUMN old TO new

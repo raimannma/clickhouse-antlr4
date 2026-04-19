@@ -1,0 +1,15 @@
+build/
+*.class
+*.tokens
+*.interp
+ClickHouse*BaseListener.java
+ClickHouse*Listener.java
+ClickHouse*BaseVisitor.java
+ClickHouse*Visitor.java
+ClickHouseLexer.java
+ClickHouseParser.java
+
+# Rust validator crate (rust/) — let its own .gitignore handle target/, etc.
+rust/target/
+rust/Cargo.lock
+rust/src/generated/

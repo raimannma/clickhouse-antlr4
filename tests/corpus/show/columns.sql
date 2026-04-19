@@ -1,0 +1,1 @@
+SHOW FULL COLUMNS FROM db.t LIKE '%_id'

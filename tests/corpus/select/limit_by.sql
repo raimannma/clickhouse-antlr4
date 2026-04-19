@@ -1,0 +1,1 @@
+SELECT * FROM t ORDER BY x LIMIT 2 BY group_id LIMIT 100

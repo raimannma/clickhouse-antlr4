@@ -1,0 +1,1 @@
+INSERT INTO target SELECT * FROM src WHERE id > 100

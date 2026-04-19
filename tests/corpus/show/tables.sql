@@ -1,0 +1,1 @@
+SHOW TABLES FROM db LIKE 'event%' LIMIT 10

@@ -1,0 +1,1 @@
+EXPLAIN PLAN SELECT count() FROM t

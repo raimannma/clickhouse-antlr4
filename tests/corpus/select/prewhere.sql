@@ -1,0 +1,1 @@
+SELECT col FROM t PREWHERE date >= '2024-01-01' WHERE id > 0

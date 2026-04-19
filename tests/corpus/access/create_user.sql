@@ -1,0 +1,1 @@
+CREATE USER alice IDENTIFIED WITH sha256_password BY 'secret' HOST ANY DEFAULT ROLE admin SETTINGS max_threads = 4 READONLY
