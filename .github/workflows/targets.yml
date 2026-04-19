@@ -1,0 +1,27 @@
+name: targets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ClickHouseLexer.g4'
+      - 'ClickHouseParser.g4'
+  pull_request:
+    paths:
+      - 'ClickHouseLexer.g4'
+      - 'ClickHouseParser.g4'
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [Java, Python3, JavaScript, TypeScript, Go, Cpp]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-antlr
+      - run: |
+          java -jar "$ANTLR_JAR" -Dlanguage=${{ matrix.target }} \
+            -o /tmp/gen-${{ matrix.target }} \
+            ClickHouseLexer.g4 ClickHouseParser.g4

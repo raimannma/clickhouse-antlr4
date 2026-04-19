@@ -1,0 +1,28 @@
+name: Set up ANTLR
+description: Install JDK 21 and place antlr-4.13.2-complete.jar at ~/.cache/antlr4/.
+outputs:
+  jar-path:
+    description: Absolute path to the ANTLR jar.
+    value: ${{ steps.jar.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
+    - id: cache
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/antlr4
+        key: antlr-4.13.2
+    - id: jar
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.cache/antlr4"
+        JAR="$HOME/.cache/antlr4/antlr-4.13.2-complete.jar"
+        if [[ ! -f "$JAR" ]]; then
+          curl -fsSL -o "$JAR" https://www.antlr.org/download/antlr-4.13.2-complete.jar
+        fi
+        echo "path=$JAR" >> "$GITHUB_OUTPUT"
+        echo "ANTLR_JAR=$JAR" >> "$GITHUB_ENV"

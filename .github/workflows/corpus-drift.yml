@@ -1,0 +1,89 @@
+name: corpus-drift
+
+on:
+  schedule:
+    - cron: '30 6 * * 1'   # Monday 06:30 UTC (30 min after keyword-drift)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: clickhouse-antlr4
+          fetch-depth: 0
+      - uses: actions/checkout@v6
+        with:
+          repository: ClickHouse/ClickHouse
+          path: ClickHouse
+          sparse-checkout: tests/queries/0_stateless
+          sparse-checkout-cone-mode: false
+      - uses: ./clickhouse-antlr4/.github/actions/setup-antlr
+      - name: Diff + triage new fixtures
+        id: triage
+        working-directory: clickhouse-antlr4
+        run: |
+          set -euo pipefail
+          STAGED=tests/corpus/stateless
+          UPSTREAM=../ClickHouse/tests/queries/0_stateless
+          # Files upstream we don't yet have.
+          comm -23 \
+            <(cd "$UPSTREAM" && ls *.sql | sort) \
+            <(cd "$STAGED"  && ls *.sql | sort) > /tmp/new.txt || true
+          # Drop deliberate-error fixtures.
+          : > /tmp/new-candidates.txt
+          while read -r f; do
+            [[ -z "$f" ]] && continue
+            if ! grep -qE '\{\s*(clientError|serverError)' "$UPSTREAM/$f"; then
+              cp "$UPSTREAM/$f" "$STAGED/$f"
+              echo "$f" >> /tmp/new-candidates.txt
+            fi
+          done < /tmp/new.txt
+          # Parse the full corpus.
+          if tests/run_tests.sh > /tmp/log.txt 2>&1; then
+            echo "all-pass=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "all-pass=false" >> "$GITHUB_OUTPUT"
+            # Separate passing from failing in the staged additions.
+            grep '^  FAIL' /tmp/log.txt \
+              | sed 's|.*corpus/stateless/||;s|\.sql.*||' > /tmp/failed.txt || true
+            # Remove failing ones from staging so the PR only adds passing ones.
+            while read -r f; do
+              [[ -z "$f" ]] && continue
+              rm -f "$STAGED/${f}.sql"
+            done < /tmp/failed.txt
+          fi
+          echo "added=$(wc -l < /tmp/new-candidates.txt)" >> "$GITHUB_OUTPUT"
+          echo "failed=$([[ -f /tmp/failed.txt ]] && wc -l < /tmp/failed.txt || echo 0)" >> "$GITHUB_OUTPUT"
+      - name: Open PR with new passing fixtures
+        if: steps.triage.outputs.added != '0'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          path: clickhouse-antlr4
+          branch: corpus/auto-sync
+          title: 'corpus: sync new upstream stateless fixtures'
+          commit-message: 'corpus: sync new upstream stateless fixtures'
+          body: |
+            Automated sync of new `tests/queries/0_stateless/*.sql` files from
+            ClickHouse upstream that parse cleanly against the current grammar.
+          labels: corpus-drift
+      - name: Open issue for failing fixtures
+        if: steps.triage.outputs.failed != '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = await import('node:fs/promises');
+            const failing = (await fs.readFile('/tmp/failed.txt', 'utf8')).trim();
+            const log = await fs.readFile('/tmp/log.txt', 'utf8');
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `Grammar gaps found in ${failing.split('\n').length} upstream fixtures`,
+              labels: ['corpus-drift', 'grammar-gap'],
+              body: `New stateless fixtures that don't parse with the current grammar:\n\n\`\`\`\n${failing}\n\`\`\`\n\n<details><summary>Runner output</summary>\n\n\`\`\`\n${log.slice(0, 60000)}\n\`\`\`\n\n</details>`,
+            });

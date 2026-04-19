@@ -1,0 +1,49 @@
+name: keyword-drift
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: clickhouse-antlr4
+      - uses: actions/checkout@v6
+        with:
+          repository: ClickHouse/ClickHouse
+          path: ClickHouse
+          sparse-checkout: src/Parsers
+          sparse-checkout-cone-mode: false
+      - id: verify
+        working-directory: clickhouse-antlr4
+        run: |
+          if ! python3 tools/gen_keywords.py --verify 2> /tmp/drift.txt; then
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.verify.outputs.drift == 'true'
+        uses: actions/github-script@v9
+        env:
+          DRIFT_BODY_PATH: /tmp/drift.txt
+        with:
+          # github-script v9 is ESM-only; use dynamic import for node builtins.
+          script: |
+            const fs = await import('node:fs/promises');
+            const body = await fs.readFile(process.env.DRIFT_BODY_PATH, 'utf8');
+            const title = 'Keyword drift from upstream ClickHouse';
+            const { data } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'keyword-drift',
+            });
+            if (data.find(i => i.title === title)) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title, labels: ['keyword-drift'],
+              body: '```\n' + body + '\n```',
+            });
