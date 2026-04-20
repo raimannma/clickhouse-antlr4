@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-const ANTLR_JAR_URL: &str = "https://github.com/rrevenantt/antlr4rust/releases/download/antlr4-4.8-2-Rust0.3.0-beta/antlr4-4.8-2-SNAPSHOT-complete.jar";
-const ANTLR_JAR_NAME: &str = "antlr4-4.8-2-SNAPSHOT-complete.jar";
+const ANTLR_JAR_URL: &str = "https://github.com/antlr4rust/antlr4/releases/download/v0.5.0/antlr4-4.13.3-SNAPSHOT-complete.jar";
+const ANTLR_JAR_NAME: &str = "antlr4-4.13.3-SNAPSHOT-complete.jar";
 
 const GRAMMAR_FILES: &[&str] = &["ClickHouseLexer.g4", "ClickHouseParser.g4"];
 
@@ -238,44 +238,26 @@ fn generate(jar: &Path, repo_root: &Path, out_dir: &Path) {
     patch_generated(out_dir);
 }
 
-/// Work around two antlr4rust codegen quirks:
-///
-/// 1. When the parser grammar file is named `FooParser.g4`, some
-///    labeled-alternative impl blocks are emitted with the trait name
-///    `FooParserParserContext` (double "Parser") while the trait itself is
-///    defined as `FooParserContext`.
-/// 2. The `VOCABULARY` static is emitted as `Box<dyn Vocabulary>`. That works
-///    with stock `lazy_static` (whose `Lazy<T>` wraps `std::sync::Once<T>` and
-///    only requires `T: Sync`), but breaks for any downstream workspace that
-///    activates `lazy_static/spin_no_std` — `spin::Once<T>: Sync` requires
-///    `T: Send + Sync`, and `dyn Vocabulary` is `Sync` but not `Send`. Add an
-///    explicit `+ Send` bound so the generated code compiles under either
-///    `lazy_static` flavor.
+/// Work around an antlr4rust codegen quirk: when the parser grammar file is
+/// named `FooParser.g4`, some labeled-alternative impl blocks are emitted with
+/// the trait name `FooParserParserContext` (double "Parser") while the trait
+/// itself is defined as `FooParserContext`.
 fn patch_generated(out_dir: &Path) {
-    const TARGETS: &[(&str, &str)] = &[
-        ("ClickHouseParserParserContext", "ClickHouseParserContext"),
-        (
-            "static ref VOCABULARY: Box<dyn Vocabulary> =",
-            "static ref VOCABULARY: Box<dyn Vocabulary + Send> =",
-        ),
-    ];
+    const FROM: &str = "ClickHouseParserParserContext";
+    const TO: &str = "ClickHouseParserContext";
     for f in GENERATED_FILES {
         let p = out_dir.join(f);
         if !p.exists() {
             continue;
         }
         let Ok(src) = fs::read_to_string(&p) else { continue };
-        let mut patched = src.clone();
-        for (from, to) in TARGETS {
-            if patched.contains(from) {
-                patched = patched.replace(from, to);
-            }
+        if !src.contains(FROM) {
+            continue;
         }
-        if patched != src {
-            fs::write(&p, patched).unwrap_or_else(|e| {
-                panic!("failed to patch {}: {e}", p.display())
-            });
-        }
+        let patched = src.replace(FROM, TO);
+        fs::write(&p, patched).unwrap_or_else(|e| {
+            panic!("failed to patch {}: {e}", p.display())
+        });
     }
 }
 

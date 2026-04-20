@@ -8,12 +8,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use antlr_rust::{InputStream, Parser};
-use antlr_rust::common_token_stream::CommonTokenStream;
-use antlr_rust::error_listener::ErrorListener;
-use antlr_rust::errors::ANTLRError;
-use antlr_rust::recognizer::Recognizer;
-use antlr_rust::token_factory::TokenFactory;
+use antlr4rust::{InputStream, Parser};
+use antlr4rust::common_token_stream::CommonTokenStream;
+use antlr4rust::error_listener::ErrorListener;
+use antlr4rust::errors::ANTLRError;
+use antlr4rust::recognizer::Recognizer;
+use antlr4rust::token_factory::TokenFactory;
 
 mod generated;
 
