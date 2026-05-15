@@ -14,7 +14,9 @@ options { tokenVocab = ClickHouseLexer; }
 // Top-level
 // =============================================================================
 
-query           : SEMICOLON* (statement (SEMICOLON+ statement)*)? SEMICOLON* EOF ;
+query           : SEMICOLON* (statementChain (SEMICOLON+ statementChain)*)? SEMICOLON* EOF ;
+
+statementChain  : (EXECUTE AS identifier)? statement (PARALLEL WITH statement)* ;
 
 statement
     : selectUnion                       # stmtSelect
@@ -125,7 +127,8 @@ nonReservedKeyword
     | MONTHS | MOVE | MOVES | MS | MUTATION
     | N_KW | NAME | NAMED | NANOSECOND | NANOSECONDS | NATIONAL | NATURAL | NEW
     | NEXT | NULL_KW
-    | NO | NONE | NOTIFY | NS | NULLS
+    | NO | NO_PASSWORD | NONE | NOTIFY | NS | NULLS
+    | SSH_KEY
     | OBJECT | OFFSET | ONLY | OPTIMIZE | OPTION | OR | ORDER | OUTER | OUTFILE
     | OVERRIDABLE | OVERRIDE
     | PAGE | PARALLEL | PARQUET | PART | PARTIAL | PARTITION | PARTITIONS | PARTS | PASTE | PATCHES
@@ -330,7 +333,7 @@ enumElement
 expr
     : primaryExpr                                                                   # eePrimary
     | expr LBRACKET expr? RBRACKET                                                  # eeArrayElement     // (14) — `[]` allowed for JSON-style unwrap
-    | expr DOT (NUMBER | identifier | STAR | CARET identifier | AT identifier | COLON dataType)  # eeTupleElement   // (14) JSON subcolumn forms included
+    | expr DOT (MINUS? NUMBER | identifier | STAR | CARET identifier | AT identifier | COLON dataType)  # eeTupleElement   // (14) JSON subcolumn forms included; negative idx via `.-N`
     | expr DOUBLE_COLON dataType                                                    # eeCastOp           // (14)
     | (PLUS | MINUS) expr                                                           # eeUnaryMinus       // (13) — unary +/-
     | expr (STAR | SLASH | PERCENT | MOD | DIV) expr                                # eeMul              // (12)
@@ -359,6 +362,7 @@ primaryExpr
     | substringFunction                                         # peSubstring
     | trimFunction                                              # peTrim
     | positionFunction                                          # pePosition
+    | overlayFunction                                           # peOverlay
     | columnsMatcher                                            # peColumnsMatcher
     | qualifiedAsteriskExpr                                     # peQualifiedAsterisk
     | asteriskExpr                                              # peAsterisk
@@ -447,6 +451,10 @@ positionFunction
     : identifier LPAREN expr IN expr RPAREN
     ;
 
+overlayFunction
+    : identifier LPAREN expr PLACING expr FROM expr (FOR expr)? RPAREN
+    ;
+
 // ---- Function calls, window, filter, nulls -----------------------------------
 
 // Split into parametric (two paren pairs, e.g. `quantile(0.5)(x)`) and
@@ -491,7 +499,10 @@ windowDefinition
     ;
 
 windowDefinitionElements
-    : identifier? (PARTITION BY expr (COMMA expr)*)? (ORDER BY orderByElement (COMMA orderByElement)*)? windowFrame?
+    : identifier?
+      (PARTITION BY expr (AS identifier)? (COMMA expr (AS identifier)?)*)?
+      (ORDER BY orderByElement (COMMA orderByElement)*)?
+      windowFrame?
     ;
 
 windowFrame
@@ -537,10 +548,10 @@ columnsMatcherBody
 columnsTransformer
     : APPLY LPAREN (functionName (LPAREN functionArgList? RPAREN)? | expr) RPAREN (AS identifier)?
     | APPLY functionName (LPAREN functionArgList? RPAREN)? (AS identifier)?  // no outer parens
-    | EXCEPT LPAREN identifier (COMMA identifier)* RPAREN
-    | EXCEPT LPAREN STRING_LITERAL RPAREN
-    | EXCEPT STRING_LITERAL                            // single regex literal, no parens
-    | EXCEPT identifier                                // single column, no parens
+    | EXCEPT STRICT? LPAREN identifier (COMMA identifier)* RPAREN
+    | EXCEPT STRICT? LPAREN STRING_LITERAL RPAREN
+    | EXCEPT STRICT? STRING_LITERAL                    // single regex literal, no parens
+    | EXCEPT STRICT? identifier                        // single column, no parens
     | REPLACE STRICT? LPAREN columnsReplaceItem (COMMA columnsReplaceItem)* RPAREN
     | REPLACE STRICT? columnsReplaceItem               // single item, no parens
     | RENAME LPAREN columnsRenameItem (COMMA columnsRenameItem)* RPAREN
@@ -595,7 +606,7 @@ selectQuery
     ;
 
 withClause
-    : WITH RECURSIVE? withElement (COMMA withElement)*
+    : WITH RECURSIVE? withElement (COMMA withElement)* COMMA?
     ;
 
 withElement
@@ -705,7 +716,7 @@ joinElement
     ;
 
 arrayJoinClause
-    : (INNER | LEFT)? ARRAY JOIN arrayJoinItem (COMMA arrayJoinItem)*
+    : (INNER | LEFT)? ARRAY JOIN (arrayJoinItem (COMMA arrayJoinItem)*)?
     ;
 
 arrayJoinItem
@@ -738,6 +749,7 @@ joinConstraint
     : ON expr
     | USING LPAREN usingItem (COMMA usingItem)* RPAREN
     | USING usingItem (COMMA usingItem)*
+    | USING STAR                       // JOIN ... USING *
     ;
 
 // USING may alias columns inline: `USING (x AS y)`.
@@ -801,8 +813,10 @@ insertBody
     : VALUES (valuesRow (COMMA? valuesRow)* COMMA?)?   # ibValues
     | selectUnion formatDataTail?                       # ibSelect
     | FORMAT identifier formatDataTail                  # ibFormatOnly
-    | FROM INFILE STRING_LITERAL (COMPRESSION STRING_LITERAL)? settingsClause? (FORMAT identifier)?
-                                                        # ibFromInfile
+    | FROM INFILE STRING_LITERAL (COMPRESSION STRING_LITERAL)? settingsClause?
+        ( FORMAT identifier formatDataTail?
+        | selectUnion formatDataTail?
+        )?                                              # ibFromInfile
     ;
 
 // Anything after `... FORMAT <name>` is raw data for the named format; we
@@ -822,7 +836,7 @@ valuesRow
 updateStatement
     : UPDATE databaseAndTableName onCluster?
         SET assignmentList
-        (IN PARTITION expr)?
+        (IN PARTITION partitionKey)?
         WHERE expr
         settingsClause?
     ;
@@ -837,7 +851,7 @@ assignment
 
 deleteStatement
     : DELETE FROM databaseAndTableName onCluster?
-        (IN PARTITION expr)?
+        (IN PARTITION partitionKey)?
         WHERE expr
         settingsClause?
     ;
@@ -858,6 +872,7 @@ setStatement
     : SET settingAssignment (COMMA settingAssignment)*
     | SET TRANSACTION SNAPSHOT expr
     | SET transactionIsoLevel
+    | SET TIME ZONE EQ? STRING_LITERAL
     ;
 
 transactionIsoLevel
@@ -935,7 +950,16 @@ columnDeclaration
          | commentClause
          | primaryKeyMarker
          | columnSettingsClause
+         | columnCompatAttr
         )*
+    ;
+
+// MySQL-compat column attributes that ClickHouse's parser tolerates
+// (and may either ignore or treat as syntax errors at the analysis stage).
+columnCompatAttr
+    : AUTO_INCREMENT
+    | COLLATE (STRING_LITERAL | identifier)
+    | UNIQUE KEY?
     ;
 
 // Per-column SETTINGS(...) clause (used by MergeTree column-level tuning).
@@ -1035,6 +1059,8 @@ engineOption
     | ORDER BY engineOrderBy
     | SAMPLE BY expr
     | TTL ttlElement (COMMA ttlElement)*
+    | WATERMARK expr                              // window-view: ENGINE = Memory WATERMARK toIntervalSecond(5)
+    | UNIQUE KEY (LPAREN expr (COMMA expr)* RPAREN | expr)
     | settingsClause
     ;
 
@@ -1052,10 +1078,9 @@ engineOrderByExpr
 // --- CREATE VIEW variants -----------------------------------------------------
 
 createView
-    : createOrReplace (MATERIALIZED | LIVE | WINDOW)? VIEW ifNotExists?
+    : createOrReplace TEMPORARY? (MATERIALIZED | LIVE | WINDOW)? VIEW ifNotExists?
         databaseAndTableName uuidClause? onCluster?
-        viewTargets?
-        refreshStrategy?
+        (viewTargets | refreshStrategy)*
         tableBody?
         engineClause?
         sqlSecurity?
@@ -1064,7 +1089,9 @@ createView
     ;
 
 viewTargets
-    : TO databaseAndTableName tableBody?
+    : TO databaseAndTableName tableBody? (INNER engineClause)?
+    | TO INNER UUID STRING_LITERAL tableBody?
+    | INNER engineClause
     ;
 
 refreshStrategy
@@ -1114,6 +1141,7 @@ dictionaryAttributeOption
     : DEFAULT expr
     | EXPRESSION expr
     | HIERARCHICAL
+    | BIDIRECTIONAL
     | INJECTIVE
     | IS_OBJECT_ID
     ;
@@ -1156,9 +1184,13 @@ rangeArg
 
 createIndex
     : CREATE UNIQUE? INDEX ifNotExists? identifier onCluster? ON databaseAndTableName
-        (LPAREN expr RPAREN | expr)
+        (LPAREN indexColumn (COMMA indexColumn)* RPAREN | expr)
         (TYPE codecArg)?
         (GRANULARITY NUMBER)?
+    ;
+
+indexColumn
+    : expr (ASC | ASCENDING | DESC | DESCENDING)?
     ;
 
 // =============================================================================
@@ -1188,14 +1220,15 @@ alterCommand
 alterColumn
     : ADD COLUMN ifNotExists? columnDeclaration (AFTER compoundIdentifier | FIRST)?
     | DROP COLUMN ifExists? compoundIdentifier
-    | CLEAR COLUMN ifExists? compoundIdentifier (IN PARTITION expr)?
+    | CLEAR COLUMN ifExists? compoundIdentifier (IN PARTITION partitionKey)?
     | RENAME COLUMN ifExists? compoundIdentifier TO compoundIdentifier
     | COMMENT COLUMN ifExists? compoundIdentifier STRING_LITERAL
-    | MATERIALIZE COLUMN compoundIdentifier (IN PARTITION expr)?
-    | MODIFY COLUMN ifExists? columnDeclaration (AFTER compoundIdentifier | FIRST)?
-    | MODIFY COLUMN ifExists? compoundIdentifier REMOVE (DEFAULT | MATERIALIZED | ALIAS | CODEC | COMMENT | TTL | SETTINGS)
-    | MODIFY COLUMN ifExists? compoundIdentifier RESET SETTING identifier (COMMA identifier)*
-    | MODIFY COLUMN ifExists? compoundIdentifier MODIFY SETTING settingAssignment (COMMA settingAssignment)*
+    | MATERIALIZE COLUMN compoundIdentifier (IN PARTITION partitionKey)?
+    | (MODIFY | ALTER) COLUMN ifExists? columnDeclaration (AFTER compoundIdentifier | FIRST)?
+    | (MODIFY | ALTER) COLUMN ifExists? compoundIdentifier TYPE dataType
+    | (MODIFY | ALTER) COLUMN ifExists? compoundIdentifier REMOVE (DEFAULT | MATERIALIZED | ALIAS | CODEC | COMMENT | TTL | SETTINGS)
+    | (MODIFY | ALTER) COLUMN ifExists? compoundIdentifier RESET SETTING identifier (COMMA identifier)*
+    | (MODIFY | ALTER) COLUMN ifExists? compoundIdentifier MODIFY SETTING settingAssignment (COMMA settingAssignment)*
     ;
 
 ifExists : IF EXISTS ;
@@ -1203,8 +1236,8 @@ ifExists : IF EXISTS ;
 alterIndex
     : ADD indexDeclaration (AFTER identifier | FIRST)?
     | DROP INDEX ifExists? identifier
-    | CLEAR INDEX ifExists? identifier (IN PARTITION expr)?
-    | MATERIALIZE INDEX identifier (IN PARTITION expr)?
+    | CLEAR INDEX ifExists? identifier (IN PARTITION partitionKey)?
+    | MATERIALIZE INDEX identifier (IN PARTITION partitionKey)?
     ;
 
 alterProjection
@@ -1212,20 +1245,20 @@ alterProjection
         (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
         (AFTER identifier | FIRST)?
     | DROP PROJECTION ifExists? identifier
-    | CLEAR PROJECTION ifExists? identifier (IN PARTITION expr)?
-    | MATERIALIZE PROJECTION ifExists? identifier (IN PARTITION expr)?
+    | CLEAR PROJECTION ifExists? identifier (IN PARTITION partitionKey)?
+    | MATERIALIZE PROJECTION ifExists? identifier (IN PARTITION partitionKey)?
     ;
 
 alterConstraint
-    : ADD CONSTRAINT ifNotExists? constraintDeclaration
+    : ADD CONSTRAINT ifNotExists? identifier (CHECK | ASSUME) expr
     | DROP CONSTRAINT ifExists? identifier
     ;
 
 alterStatistics
-    : ADD STATISTICS identifier (COMMA identifier)* TYPE codecArg (COMMA codecArg)*
-    | DROP STATISTICS identifier (COMMA identifier)*
-    | CLEAR STATISTICS identifier (COMMA identifier)*
-    | MATERIALIZE STATISTICS identifier (COMMA identifier)*
+    : ADD STATISTICS ifNotExists? identifier (COMMA identifier)* TYPE codecArg (COMMA codecArg)*
+    | DROP STATISTICS ifExists? identifier (COMMA identifier)*
+    | CLEAR STATISTICS ifExists? identifier (COMMA identifier)*
+    | MATERIALIZE STATISTICS ifExists? identifier (COMMA identifier)*
     | MODIFY STATISTICS identifier (COMMA identifier)* TYPE codecArg (COMMA codecArg)*
     ;
 
@@ -1235,9 +1268,9 @@ alterTableLevel
     | REMOVE SAMPLE BY
     | MODIFY TTL ttlElement (COMMA ttlElement)*
     | REMOVE TTL
-    | MATERIALIZE TTL (IN PARTITION expr)?
+    | MATERIALIZE TTL (IN PARTITION partitionKey)?
     | MODIFY QUERY selectUnion
-    | MODIFY REFRESH refreshStrategy
+    | MODIFY refreshStrategy
     | MODIFY SETTING settingAssignment (COMMA settingAssignment)*
     | RESET SETTING identifier (COMMA identifier)*
     | MODIFY COMMENT STRING_LITERAL
@@ -1266,7 +1299,7 @@ alterPartition
     ;
 
 partitionKey
-    : ID STRING_LITERAL
+    : ID (STRING_LITERAL | queryParameter)
     | expr
     ;
 
@@ -1277,9 +1310,10 @@ alterMutation
 
 alterCleanup
     : CLEANUP
-    | APPLY PATCHES
+    | APPLY PATCHES (IN PARTITION partitionKey)?
     | APPLY DELETED MASK (IN PARTITION partitionKey)?
     | REWRITE PARTS
+    | EXECUTE identifier (LPAREN functionArgList? RPAREN)?  // e.g. ALTER TABLE t EXECUTE expire_snapshots('...')
     ;
 
 // =============================================================================
@@ -1295,13 +1329,13 @@ dropStatement
     ;
 
 undropStatement
-    : UNDROP TABLE ifExists? databaseAndTableName uuidClause? onCluster?
+    : UNDROP TABLE ifExists? databaseAndTableName uuidClause? onCluster? formatClause?
     ;
 
 renameStatement
-    : RENAME (TABLE | DICTIONARY | DATABASE)?
+    : RENAME (TABLE | DICTIONARY | DATABASE)? ifExists?
         renameEntry (COMMA renameEntry)* onCluster?
-    | EXCHANGE (TABLES | DICTIONARIES) databaseAndTableName AND databaseAndTableName onCluster?
+    | EXCHANGE (TABLES | DICTIONARIES) ifExists? databaseAndTableName AND databaseAndTableName onCluster?
     ;
 
 renameEntry
@@ -1313,6 +1347,7 @@ truncateStatement
         (PERMANENTLY | NO DELAY | SYNC | ASYNC)?
         settingsClause?
     | TRUNCATE ALL? TABLES FROM ifExists? nameOrParam ((NOT)? LIKE STRING_LITERAL)? onCluster?
+    | TRUNCATE DATABASE ifExists? (databaseAndTableName | nameOrParam) onCluster? (SYNC | ASYNC)? settingsClause?
     ;
 
 // =============================================================================
@@ -1338,8 +1373,9 @@ checkStatement
     ;
 
 describeStatement
-    : (DESCRIBE | DESC) TABLE? TEMPORARY?
+    : (DESCRIBE | DESC) TEMPORARY? TABLE? TEMPORARY?
         (databaseAndTableName | tableFunctionCall | LPAREN selectUnion RPAREN | selectUnion)
+        FINAL?
         (settingsClause | formatClause)*
     ;
 
@@ -1353,7 +1389,20 @@ existsStatement
 // =============================================================================
 
 systemStatement
-    : SYSTEM onCluster? systemCommand onCluster? systemTarget? settingsClause?
+    : SYSTEM onCluster? systemCommand onCluster? systemTarget? systemSuffix* settingsClause?
+    ;
+
+// Post-target modifiers used by various SYSTEM commands:
+// SYNC REPLICA … STRICT | LIGHTWEIGHT [FROM 'r1','r2'] | PULL | IF EXISTS
+// TEST VIEW … SET FAKE TIME 'ts' | UNSET FAKE TIME
+systemSuffix
+    : STRICT
+    | PULL
+    | LIGHTWEIGHT (FROM STRING_LITERAL (COMMA STRING_LITERAL)*)?
+    | ifExists
+    | SET FAKE TIME STRING_LITERAL
+    | UNSET FAKE TIME
+    | WITH identifier+                            // SYSTEM START LISTEN TCP WITH PROXY
     ;
 
 // SYSTEM commands. These are sequences of single-word keywords (from the
@@ -1381,7 +1430,11 @@ systemCommand
 // Accepts an optional comma-separated identifier tail for commands like
 // SYSTEM FLUSH LOGS log1, log2 and SYSTEM FLUSH ASYNC INSERT QUEUE name.
 systemCommandTail
-    : identifier+ (LPAREN functionArgList? RPAREN)? (COMMA identifier)*
+    : systemNamePart+ (LPAREN functionArgList? RPAREN)? (COMMA systemNamePart)* NUMBER?
+    ;
+
+systemNamePart
+    : identifier (DOT identifier)?
     ;
 
 // Target specifier — SYSTEM SYNC REPLICA name, SYSTEM DROP REPLICA '...' FROM ...
@@ -1392,6 +1445,7 @@ systemTarget
         | FROM DATABASE identifier
         | FROM ZKPATH STRING_LITERAL
         )?
+        (KEY identifier (OFFSET NUMBER)?)?         // SYSTEM DROP FILESYSTEM CACHE 'n' KEY k [OFFSET o]
     | databaseAndTableName
     ;
 
@@ -1400,9 +1454,10 @@ systemTarget
 // =============================================================================
 
 showStatement
-    : SHOW CREATE TEMPORARY? (TABLE | VIEW | DICTIONARY | DATABASE | USER | ROLE | QUOTA | ROW? POLICY | SETTINGS? PROFILE | NAMED COLLECTION | WORKLOAD | RESOURCE | FUNCTION)? showTarget (settingsClause | formatClause)*  # showCreate
+    : SHOW CREATE TEMPORARY? (TABLE | VIEW | DICTIONARY | DATABASE | USER | ROLE | QUOTA | ROW? POLICY | SETTINGS? PROFILE | NAMED COLLECTION | WORKLOAD | RESOURCE | FUNCTION)? showTarget (COMMA showTarget)* (settingsClause | formatClause)*  # showCreate
     | SHOW TABLE databaseAndTableName (settingsClause | formatClause)*        # showTable   // alias for SHOW CREATE TABLE
     | SHOW DATABASE databaseAndTableName (settingsClause | formatClause)*     # showDatabase // alias for SHOW CREATE DATABASE
+    | SHOW TEMPORARY VIEW databaseAndTableName (settingsClause | formatClause)*  # showTemporaryView
     | SHOW FULL? TEMPORARY? TABLES (FROM databaseAndTableName | IN databaseAndTableName)? showFilter? limitOptional? formatClause?   # showTables
     | SHOW DATABASES showFilter? limitOptional? formatClause?                  # showDatabases
     | SHOW CLUSTERS showFilter? limitOptional? formatClause?                   # showClusters
@@ -1442,7 +1497,7 @@ showFilter
 // Target for SHOW CREATE — may be a qualified name, a `user@host` access-
 // entity target, or a bare identifier (e.g. SHOW CREATE QUOTA default).
 showTarget
-    : (databaseAndTableName | STRING_LITERAL) (AT (identifier | STRING_LITERAL))?
+    : (databaseAndTableName | STRING_LITERAL) (AT (identifier | STRING_LITERAL))? (ON policyTarget)?
     ;
 
 limitOptional
@@ -1562,11 +1617,16 @@ privilegeWord
 grantTarget
     : STAR DOT STAR
     | identifier DOT STAR
+    | identifier STAR DOT STAR                          // GRANT ... ON prefix*.*
+    | identifier STAR                                   // GRANT ... ON foo*
+    | identifier DOT identifier STAR                    // db.tbl*
     | databaseAndTableName
     ;
 
 granteeList
-    : grantee (COMMA grantee)*
+    : ALL (EXCEPT grantee (COMMA grantee)*)?
+    | NONE
+    | grantee (COMMA grantee)*
     ;
 
 grantee
@@ -1580,7 +1640,7 @@ roleList
     ;
 
 setRoleStatement
-    : SET DEFAULT ROLE (roleList | ALL | NONE) TO granteeList
+    : SET DEFAULT ROLE (roleList | ALL (EXCEPT roleList)? | NONE) TO granteeList
     | SET ROLE (DEFAULT | NONE | ALL (EXCEPT roleList)? | roleList)
     ;
 
@@ -1589,16 +1649,14 @@ setRoleStatement
 createAccessStatement
     : (CREATE | ATTACH) (OR REPLACE)? accessEntityKind (OR REPLACE)? ifNotExists?
         accessEntityNameTarget (COMMA accessEntityNameTarget)*
-        onCluster?
-        (ON policyTarget (COMMA policyTarget)*)?
+        accessEntityOnClause*
         accessEntityBodyItem*
     ;
 
 alterAccessStatement
     : ALTER accessEntityKind ifExists?
         accessEntityNameTarget (COMMA accessEntityNameTarget)*
-        onCluster?
-        (ON policyTarget (COMMA policyTarget)*)?
+        accessEntityOnClause*
         (RENAME TO accessEntityNameTarget)?
         accessEntityBodyItem*
     ;
@@ -1619,10 +1677,17 @@ policyTarget
     | STAR
     ;
 
+// A single reference in a DROP/SHOW comma list — either `name [ON target]`
+// (used by access entities) or a bare policy target (subsequent targets of
+// a single policy after the first `ON`).
+accessRefItem
+    : accessEntityNameTarget (ON policyTarget)?
+    | policyTarget                       // continuation: db.tbl after `… ON db1.t1, db2.t2`
+    ;
+
 dropAccessStatement
     : DROP accessEntityKind ifExists?
-        accessEntityNameTarget (COMMA accessEntityNameTarget)*
-        (ON policyTarget (COMMA policyTarget)*)?
+        accessRefItem (COMMA accessRefItem)*
         onCluster?
         (FROM STRING_LITERAL)?
     | MOVE accessEntityKind identifier TO STRING_LITERAL
@@ -1631,7 +1696,7 @@ dropAccessStatement
 // Access-entity name targets. Users can be scoped by `@host`; quoted-string
 // names are accepted as well (e.g. SHOW CREATE USER 'alice@1.2.3.4').
 accessEntityNameTarget
-    : (identifier | STRING_LITERAL) (AT (identifier | STRING_LITERAL))?
+    : (identifier | STRING_LITERAL | queryParameter) (AT (identifier | STRING_LITERAL | queryParameter))?
     ;
 
 accessEntityKind
@@ -1649,7 +1714,7 @@ accessEntityBodyItem
     : IDENTIFIED identifiedMethod (COMMA identifiedMethod)*
     | IDENTIFIED
     | NOT IDENTIFIED
-    | DEFAULT ROLE (identifier (COMMA identifier)* | NONE | ALL (EXCEPT identifier+)?)
+    | DEFAULT ROLE (identifier (COMMA identifier)* | NONE | ALL (EXCEPT identifier (COMMA identifier)*)?)
     | DEFAULT DATABASE identifier
     | (ADD | DROP)? HOST (ANY | NONE | hostSpec (COMMA hostSpec)*)
     | GRANTEES (ANY | NONE | identifier (COMMA identifier)* | EXCEPT identifier (COMMA identifier)*)
@@ -1661,8 +1726,10 @@ accessEntityBodyItem
     | AS (PERMISSIVE | RESTRICTIVE)
     | USING expr
     | WITH CHECK expr
-    | KEYED BY identifier (COMMA identifier)*
-    | FOR RANDOMIZED? INTERVAL expr intervalUnit quotaLimits
+    | UPDATE assignmentList                  // masking-policy body: UPDATE col = expr [, ...]
+    | (KEYED | KEY) BY (identifier | STRING_LITERAL) (COMMA (identifier | STRING_LITERAL))*
+    | NOT KEYED
+    | FOR RANDOMIZED? INTERVAL? expr intervalUnit quotaLimits
     | NO LIMITS
     | TRACKING ONLY
     | (ADD | MODIFY)? SETTINGS accessSettingItem (COMMA accessSettingItem)*
@@ -1682,25 +1749,43 @@ hostSpec
 // clauses in any order, with subsequent BY-only entries reusing the previous
 // method name. We accept the union loosely.
 identifiedMethod
-    : WITH identifier (BY identifiedBy)?
-    | BY identifiedBy
-    | identifier (BY identifiedBy)?
+    : WITH identifier (BY identifiedBy)? identifiedOption*
+    | BY identifiedBy identifiedOption*
+    | identifier (BY identifiedBy)? identifiedOption*
+    | sshKeyClause                          // SSH key auth: `KEY 'k' TYPE 't'`
+    ;
+
+// kerberos REALM 'x', ldap SERVER 'y', etc. — provider-specific auth options.
+identifiedOption
+    : identifier (STRING_LITERAL | identifier | NUMBER)
     ;
 
 identifiedBy
-    : STRING_LITERAL
+    : sshKeyClause                          // BY KEY 'k' TYPE 't'
+    | STRING_LITERAL
     | queryParameter
     | LPAREN functionArgList? RPAREN
     ;
 
+sshKeyClause
+    : KEY STRING_LITERAL TYPE STRING_LITERAL
+    ;
+
 accessSettingItem
-    : identifier (EQ expr)?
+    : PROFILE (STRING_LITERAL | identifier)
+    | INHERIT (STRING_LITERAL | identifier)
+    | identifier (EQ expr)?
       (MIN EQ? expr | MAX EQ? expr | READONLY | WRITABLE | CONST | CHANGEABLE_IN_READONLY)*
     ;
 
 quotaLimits
     : NO? LIMITS
-    | (MAX identifier (EQ expr | expr))+
+    | quotaLimitItem (COMMA? quotaLimitItem)*
+    ;
+
+quotaLimitItem
+    : MAX? identifier+ (EQ expr | expr)       // `MAX errors = 11`, `MAX errors 11`, or `errors = 11`, or `RESULT ROWS MAX 1002`
+    | identifier+ MAX (EQ expr | expr)        // `errors MAX 5` / `RESULT ROWS MAX 1002`
     ;
 
 // =============================================================================
@@ -1746,7 +1831,7 @@ createResourceStatement
     ;
 
 resourceOp
-    : (READ | WRITE | MASTER THREAD | WORKER THREAD) (DISK | ANY DISK) identifier?
+    : (READ | WRITE | MASTER THREAD | WORKER THREAD) ((DISK | ANY DISK) identifier?)?
     ;
 
 dropResourceStatement
@@ -1757,7 +1842,11 @@ createWorkloadStatement
     : (CREATE | ATTACH) (OR REPLACE)? WORKLOAD ifNotExists?
         identifier onCluster?
         (IN identifier)?
-        settingsClause?
+        (SETTINGS workloadSettingItem (COMMA workloadSettingItem)*)?
+    ;
+
+workloadSettingItem
+    : identifier EQ expr (FOR identifier)?
     ;
 
 dropWorkloadStatement

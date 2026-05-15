@@ -85,6 +85,10 @@ public class CorpusRunner {
             // Read as raw bytes and decode leniently (a few fuzzer-derived
             // test fixtures in ClickHouse are deliberately non-UTF-8).
             String src = new String(Files.readAllBytes(f), StandardCharsets.UTF_8);
+            // ClickHouse's test corpus annotates statements that *should* fail
+            // to parse with `-- { clientError SYNTAX_ERROR }` trailing comments.
+            // Strip those statements so the file as a whole can be parsed.
+            src = stripClientErrorStatements(src);
             CharStream input = CharStreams.fromString(src);
             ClickHouseLexer lexer = new ClickHouseLexer(input);
             lexer.removeErrorListeners();
@@ -98,6 +102,114 @@ public class CorpusRunner {
             errs.add("runtime: " + e.getMessage());
         }
         return errs;
+    }
+
+    /**
+     * Remove statements marked `-- { clientError SYNTAX_ERROR }`.
+     * Walks the source once, tracking string/comment/heredoc boundaries to find
+     * the top-level `;` that ends each statement, then deletes any statement
+     * whose source range contains the marker.
+     */
+    static String stripClientErrorStatements(String src) {
+        if (!src.contains("clientError SYNTAX_ERROR")) return src;
+        int n = src.length();
+        StringBuilder out = new StringBuilder(n);
+        int stmtStart = 0;
+        int i = 0;
+        while (i < n) {
+            char c = src.charAt(i);
+            // single-line comment
+            if (c == '-' && i + 1 < n && src.charAt(i + 1) == '-') {
+                int j = src.indexOf('\n', i);
+                i = (j < 0) ? n : j;
+                continue;
+            }
+            if (c == '#' && (i == 0 || src.charAt(i - 1) == '\n')) {
+                int j = src.indexOf('\n', i);
+                i = (j < 0) ? n : j;
+                continue;
+            }
+            // block comment
+            if (c == '/' && i + 1 < n && src.charAt(i + 1) == '*') {
+                int j = src.indexOf("*/", i + 2);
+                i = (j < 0) ? n : j + 2;
+                continue;
+            }
+            // single-quoted string
+            if (c == '\'') {
+                i++;
+                while (i < n) {
+                    char d = src.charAt(i);
+                    if (d == '\\' && i + 1 < n) { i += 2; continue; }
+                    if (d == '\'' && i + 1 < n && src.charAt(i + 1) == '\'') { i += 2; continue; }
+                    if (d == '\'') { i++; break; }
+                    i++;
+                }
+                continue;
+            }
+            // quoted identifier: backtick or double-quote
+            if (c == '`' || c == '"') {
+                char quote = c;
+                i++;
+                while (i < n) {
+                    char d = src.charAt(i);
+                    if (d == '\\' && i + 1 < n) { i += 2; continue; }
+                    if (d == quote && i + 1 < n && src.charAt(i + 1) == quote) { i += 2; continue; }
+                    if (d == quote) { i++; break; }
+                    i++;
+                }
+                continue;
+            }
+            // heredoc $tag$ ... $tag$
+            if (c == '$') {
+                int tagEnd = i + 1;
+                while (tagEnd < n) {
+                    char d = src.charAt(tagEnd);
+                    if (d == '$') break;
+                    if (!(Character.isLetterOrDigit(d) || d == '_')) { tagEnd = -1; break; }
+                    tagEnd++;
+                }
+                if (tagEnd > 0 && tagEnd < n && src.charAt(tagEnd) == '$') {
+                    String tag = src.substring(i, tagEnd + 1);
+                    int close = src.indexOf(tag, tagEnd + 1);
+                    i = (close < 0) ? n : close + tag.length();
+                    continue;
+                }
+            }
+            if (c == ';') {
+                // Include any trailing same-line comment so a marker like
+                // `SELECT ...;  -- { clientError SYNTAX_ERROR }` is associated
+                // with the preceding statement.
+                int end = i + 1;
+                int scan = end;
+                while (scan < n) {
+                    char d = src.charAt(scan);
+                    if (d == ' ' || d == '\t') { scan++; continue; }
+                    if (d == '-' && scan + 1 < n && src.charAt(scan + 1) == '-') {
+                        int nl = src.indexOf('\n', scan);
+                        end = (nl < 0) ? n : nl;
+                        break;
+                    }
+                    break;
+                }
+                String stmt = src.substring(stmtStart, end);
+                if (!stmt.contains("clientError SYNTAX_ERROR")) {
+                    out.append(src, stmtStart, i + 1);
+                } else {
+                    for (int k = stmtStart; k < end; k++) {
+                        char ch = src.charAt(k);
+                        out.append(ch == '\n' ? '\n' : ' ');
+                    }
+                    i = end - 1;
+                }
+                stmtStart = i + 1;
+            }
+            i++;
+        }
+        // Trailing region after last `;` — keep as-is unless it's marked.
+        String tail = src.substring(stmtStart);
+        if (!tail.contains("clientError SYNTAX_ERROR")) out.append(tail);
+        return out.toString();
     }
 
     static class ErrorCollector extends BaseErrorListener {

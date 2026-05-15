@@ -32,7 +32,7 @@ LINE_COMMENT        : ('--' | '//') ~[\r\n]*            -> skip ;
 HASH_COMMENT        : '#' [ !] ~[\r\n]*                 -> skip ;
 // Unicode whitespace characters the reference lexer's skipWhitespacesUTF8
 // also treats as whitespace (non-breaking space, BOM, figure space, etc.).
-WS                  : [ \t\r\n\f\u000B\u00A0\u1680\u2000-\u200F\u2028\u2029\u202F\u205F\u2060\u3000\uFEFF]+
+WS                  : [ \t\r\n\f\u000B\u0085\u00A0\u180E\u1680\u2000-\u200F\u2028\u2029\u202F\u205F\u2060\u3000\uFEFF]+
                         -> skip ;
 
 // =============================================================================
@@ -197,6 +197,7 @@ DESCENDING          : D E S C E N D I N G ;
 DESCRIBE            : D E S C R I B E ;
 DETACH              : D E T A C H ;
 DETACHED            : D E T A C H E D ;
+DETERMINISTIC       : D E T E R M I N I S T I C ;
 DICTIONARIES        : D I C T I O N A R I E S ;
 DICTIONARY          : D I C T I O N A R Y ;
 DISABLE             : D I S A B L E ;
