@@ -36,14 +36,24 @@ jobs:
           comm -23 \
             <(cd "$UPSTREAM" && ls *.sql | sort) \
             <(cd "$STAGED"  && ls *.sql | sort) > /tmp/new.txt || true
-          # Drop deliberate-error fixtures.
+          # Drop deliberate-error fixtures and non-SQL dialects (KQL/Kusto, PRQL).
           : > /tmp/new-candidates.txt
           while read -r f; do
             [[ -z "$f" ]] && continue
-            if ! grep -qE '\{\s*(clientError|serverError)' "$UPSTREAM/$f"; then
-              cp "$UPSTREAM/$f" "$STAGED/$f"
-              echo "$f" >> /tmp/new-candidates.txt
+            # Skip by filename: anything that advertises a non-SQL dialect.
+            if [[ "$f" =~ [Kk]ql|[Kk]usto|[Pp]rql ]]; then
+              continue
             fi
+            # Skip by content: explicit dialect switch to kusto/prql.
+            if grep -qiE "dialect[[:space:]]*=[[:space:]]*'?(kusto|prql)" "$UPSTREAM/$f"; then
+              continue
+            fi
+            # Skip deliberate-error fixtures.
+            if grep -qE '\{\s*(clientError|serverError)' "$UPSTREAM/$f"; then
+              continue
+            fi
+            cp "$UPSTREAM/$f" "$STAGED/$f"
+            echo "$f" >> /tmp/new-candidates.txt
           done < /tmp/new.txt
           # Parse the full corpus.
           if tests/run_tests.sh > /tmp/log.txt 2>&1; then
@@ -52,7 +62,23 @@ jobs:
             echo "all-pass=false" >> "$GITHUB_OUTPUT"
             # Separate passing from failing in the staged additions.
             grep '^  FAIL' /tmp/log.txt \
-              | sed 's|.*corpus/stateless/||;s|\.sql.*||' > /tmp/failed.txt || true
+              | sed 's|.*corpus/stateless/||;s|\.sql.*||' > /tmp/failed-all.txt || true
+            # Drop non-SQL dialects (KQL/Kusto, PRQL) from the failed list — they
+            # are out of scope for this grammar and shouldn't be reported.
+            : > /tmp/failed.txt
+            while read -r f; do
+              [[ -z "$f" ]] && continue
+              if [[ "$f" =~ [Kk]ql|[Kk]usto|[Pp]rql ]]; then
+                rm -f "$STAGED/${f}.sql"
+                continue
+              fi
+              if [[ -f "$STAGED/${f}.sql" ]] && \
+                 grep -qiE "dialect[[:space:]]*=[[:space:]]*'?(kusto|prql)" "$STAGED/${f}.sql"; then
+                rm -f "$STAGED/${f}.sql"
+                continue
+              fi
+              echo "$f" >> /tmp/failed.txt
+            done < /tmp/failed-all.txt
             # Remove failing ones from staging so the PR only adds passing ones.
             while read -r f; do
               [[ -z "$f" ]] && continue
