@@ -85,7 +85,7 @@ nonReservedKeyword
     : ABI | ACCESS | ACTION | ADD | ADMIN | AFTER | ALGORITHM | ALIAS
     | ALL | ALLOCATE | AND | ANTI | ANY | APPEND | APPLY | ARGUMENTS | ARRAY
     | AS | ASC | ASCENDING | ASOF | ASSUME | AST | ASYNC | ASYNCHRONOUS
-    | ATTACH | AUTHENTICATION | AZURE
+    | ATTACH | AUTHENTICATION | AVRO | AZURE
     | BACKUP | BAGEXPANSION | BCRYPT_HASH | BCRYPT_PASSWORD | BEGIN
     | BIDIRECTIONAL | BINARY | BLOBS | BLOCKING | BOTH
     | CACHE | CACHES | CANCEL | CASCADE | CAST | CHANGE | CHANGED | CHAR | CHARACTER
@@ -99,7 +99,7 @@ nonReservedKeyword
     | DEPENDS | DESC | DESCENDING | DETACHED | DICTIONARIES | DICTIONARY
     | DISABLE | DISK | DISTINCT | DISTRIBUTED | DNS | DOW | DOY | DRY
     | EMBEDDED | EMPTY | ENABLE | ENABLED | END | ENFORCED | ENGINE | ENGINES
-    | EPHEMERAL | EPOCH | ESTIMATE | EVENT | EVENTS | EVERY | EXCHANGE
+    | EPHEMERAL | EPOCH | ESTIMATE | EVENT | EVENTS | EVERY | EXCEPT | EXCHANGE
     | EXECUTE | EXISTS | EXPLAIN | EXPRESSION | EXTENDED | EXTERNAL | EXTRACT
     | FAKE | FAILPOINT | FETCH | FETCHES | FIELDS | FILE | FILES | FILESYSTEM
     | FORMAT | FROM | FULL
@@ -121,7 +121,7 @@ nonReservedKeyword
     | LIFETIME | LIGHTWEIGHT | LIKE | LIMIT | LIMITS | LINEAR | LIST | LISTEN | LIVE | LOAD
     | LOADING | LOCAL | LOG | LOGS
     | M_KW | MARK | MASK | MASKING | MASTER | MATCH | MATERIALIZE | MATERIALIZED
-    | MAX | MCS | MEMORY | MERGES | METADATA | METHODS | METRICS | MI
+    | MAX | MCS | MEMORY | MERGE | MERGES | METADATA | METHODS | METRICS | MI
     | MICROSECOND | MICROSECONDS | MILLENNIUM | MILLISECOND | MILLISECONDS
     | MIN | MINUTE | MINUTES | MM | MMAP | MODEL | MODELS | MODIFY | MONTH
     | MONTHS | MOVE | MOVES | MS | MUTATION
@@ -129,7 +129,7 @@ nonReservedKeyword
     | NEXT | NULL_KW
     | NO | NO_PASSWORD | NONE | NOTIFY | NS | NULLS
     | SSH_KEY
-    | OBJECT | OFFSET | ONLY | OPTIMIZE | OPTION | OR | ORDER | OUTER | OUTFILE
+    | OBJECT | OFFSET | ONLY | OPTIMIZE | OPTION | OR | ORDER | OUTER | OUTFILE | OVER
     | OVERRIDABLE | OVERRIDE
     | PAGE | PARALLEL | PARQUET | PART | PARTIAL | PARTITION | PARTITIONS | PARTS | PASTE | PATCHES
     | PLAINTEXT_PASSWORD
@@ -147,7 +147,7 @@ nonReservedKeyword
     | RENAME | REPLACE | REPLICA | REPLICAS | REPLICATED | REPLICATION | RESET
     | RESOURCE | RESPECT | RESTART | RESTORE | RESTRICT | RESTRICTIVE | RESUME
     | RETURNS | REVOKE | REWRITE | ROLE | ROLES | ROLLBACK | ROW | ROWS | RUN
-    | S_KW | S3 | SALT | SAMPLE | SAN | SCHEMA | SCHEME | SEMI | SET
+    | S_KW | S3 | SALT | SAMPLE | SAN | SCHEDULE | SCHEMA | SCHEME | SEMI | SET
     | SQL_TSI_NANOSECOND | SQL_TSI_MICROSECOND | SQL_TSI_MILLISECOND
     | SQL_TSI_SECOND | SQL_TSI_MINUTE | SQL_TSI_HOUR
     | SQL_TSI_DAY | SQL_TSI_WEEK | SQL_TSI_MONTH | SQL_TSI_QUARTER | SQL_TSI_YEAR
@@ -333,7 +333,7 @@ enumElement
 expr
     : primaryExpr                                                                   # eePrimary
     | expr LBRACKET expr? RBRACKET                                                  # eeArrayElement     // (14) — `[]` allowed for JSON-style unwrap
-    | expr DOT (MINUS? NUMBER | identifier | STAR | CARET identifier | AT identifier | COLON dataType)  # eeTupleElement   // (14) JSON subcolumn forms included; negative idx via `.-N`
+    | expr DOT (MINUS? NUMBER | identifier (LPAREN functionArgList? RPAREN)? | STAR | CARET identifier | AT identifier | COLON dataType)  # eeTupleElement   // (14) JSON subcolumn forms included; negative idx via `.-N`
     | expr DOUBLE_COLON dataType                                                    # eeCastOp           // (14)
     | (PLUS | MINUS) expr                                                           # eeUnaryMinus       // (13) — unary +/-
     | expr (STAR | SLASH | PERCENT | MOD | DIV) expr                                # eeMul              // (12)
@@ -1023,7 +1023,7 @@ constraintDeclaration
 
 projectionDeclaration
     : PROJECTION identifier
-        (INDEX identifier TYPE codecArg)?          // PROJECTION p INDEX idx TYPE t
+        (INDEX (identifier | STAR) TYPE codecArg)?  // PROJECTION p INDEX (idx | *) TYPE t
         (LPAREN selectUnion RPAREN)?
         (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
     ;
@@ -1062,6 +1062,10 @@ engineOption
     | WATERMARK expr                              // window-view: ENGINE = Memory WATERMARK toIntervalSecond(5)
     | UNIQUE KEY (LPAREN expr (COMMA expr)* RPAREN | expr)
     | settingsClause
+    // TimeSeries engine: ENGINE = TimeSeries DATA <t> TAGS <t> METRICS <t>
+    | DATA identifier
+    | TAGS identifier
+    | METRICS identifier
     ;
 
 engineOrderBy
@@ -1416,7 +1420,7 @@ systemCommand
     | UNFREEZE (WITH NAME STRING_LITERAL)?
     | UNLOCK SNAPSHOT STRING_LITERAL (FROM identifier LPAREN functionArgList? RPAREN)?
     // START / STOP / RESTART / RESTORE families
-    | (START | STOP | RESTART | RESTORE | SYNC | WAIT | REFRESH | CANCEL | TEST | PAUSE | RESUME | DROP | CLEAR | LOAD | UNLOAD | PREWARM | ENABLE | DISABLE | NOTIFY | RELOAD | FLUSH | RESET | SYNC | SET | UNSET | ALLOCATE | FREE) systemCommandTail
+    | (START | STOP | RESTART | RESTORE | SYNC | WAIT | REFRESH | CANCEL | TEST | PAUSE | RESUME | DROP | CLEAR | LOAD | UNLOAD | PREWARM | ENABLE | DISABLE | NOTIFY | RELOAD | FLUSH | RESET | SYNC | SET | UNSET | ALLOCATE | FREE | SCHEDULE) systemCommandTail
     // SYSTEM KILL ...
     | KILL systemCommandTail
     // JEMALLOC
@@ -1431,6 +1435,7 @@ systemCommand
 // SYSTEM FLUSH LOGS log1, log2 and SYSTEM FLUSH ASYNC INSERT QUEUE name.
 systemCommandTail
     : systemNamePart+ (LPAREN functionArgList? RPAREN)? (COMMA systemNamePart)* NUMBER?
+      (STRING_LITERAL (COMMA STRING_LITERAL)*)?
     ;
 
 systemNamePart
