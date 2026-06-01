@@ -32,26 +32,50 @@ jobs:
           set -euo pipefail
           STAGED=tests/corpus/stateless
           UPSTREAM=../ClickHouse/tests/queries/0_stateless
+
+          # Fixtures we never want in the corpus regardless of whether they parse:
+          # non-SQL sub-dialects (KQL/Kusto, PRQL) and deliberate parse-error
+          # negative tests. Used to gate what gets staged. Arg: path to the .sql.
+          non_sql_or_error() {
+            local p="$1" name
+            name="$(basename "$p")"
+            # Non-SQL sub-dialects — by filename ...
+            [[ "$name" =~ [Kk]ql|[Kk]usto|[Pp]rql ]] && return 0
+            # ... or by an explicit in-file dialect switch.
+            grep -qiE "dialect[[:space:]]*=[[:space:]]*'?(kusto|prql)" "$p" && return 0
+            # Deliberate-error fixtures (negative tests).
+            grep -qE '\{[[:space:]]*(clientError|serverError)' "$p" && return 0
+            return 1
+          }
+
+          # Constructs this target-agnostic grammar deliberately cannot accept.
+          # Only consulted for fixtures that ALREADY FAILED to parse: such a
+          # failure is a known limitation, not a grammar gap, so it must not be
+          # reported. A heredoc/raw fixture that happens to parse (e.g. an output
+          # `FORMAT TSVRaw` with no inline data, or a heredoc inside `format()`)
+          # is still welcome in the corpus, so this is NOT used to gate staging.
+          out_of_scope() {
+            local p="$1"
+            non_sql_or_error "$p" && return 0
+            # Heredoc literals ($$...$$ / $tag$...$tag$): tag equality cannot be
+            # enforced without semantic predicates (documented limitation).
+            grep -qE '\$\$|\$[A-Za-z_][A-Za-z0-9_]*\$' "$p" && return 0
+            # INSERT ... FORMAT <Raw-family> with inline data: the bytes after
+            # FORMAT are raw, not tokenizable SQL (TSVRaw, TabSeparatedRaw, ...).
+            grep -qiE "FORMAT[[:space:]]+[A-Za-z]*Raw\b" "$p" && return 0
+            return 1
+          }
+
           # Files upstream we don't yet have.
           comm -23 \
             <(cd "$UPSTREAM" && ls *.sql | sort) \
             <(cd "$STAGED"  && ls *.sql | sort) > /tmp/new.txt || true
-          # Drop deliberate-error fixtures and non-SQL dialects (KQL/Kusto, PRQL).
+          # Stage every new fixture except non-SQL dialects and negative tests;
+          # whether the in-scope grammar accepts the rest is decided by parsing.
           : > /tmp/new-candidates.txt
           while read -r f; do
             [[ -z "$f" ]] && continue
-            # Skip by filename: anything that advertises a non-SQL dialect.
-            if [[ "$f" =~ [Kk]ql|[Kk]usto|[Pp]rql ]]; then
-              continue
-            fi
-            # Skip by content: explicit dialect switch to kusto/prql.
-            if grep -qiE "dialect[[:space:]]*=[[:space:]]*'?(kusto|prql)" "$UPSTREAM/$f"; then
-              continue
-            fi
-            # Skip deliberate-error fixtures.
-            if grep -qE '\{\s*(clientError|serverError)' "$UPSTREAM/$f"; then
-              continue
-            fi
+            non_sql_or_error "$UPSTREAM/$f" && continue
             cp "$UPSTREAM/$f" "$STAGED/$f"
             echo "$f" >> /tmp/new-candidates.txt
           done < /tmp/new.txt
@@ -63,17 +87,12 @@ jobs:
             # Separate passing from failing in the staged additions.
             grep '^  FAIL' /tmp/log.txt \
               | sed 's|.*corpus/stateless/||;s|\.sql.*||' > /tmp/failed-all.txt || true
-            # Drop non-SQL dialects (KQL/Kusto, PRQL) from the failed list — they
-            # are out of scope for this grammar and shouldn't be reported.
+            # Drop out-of-scope fixtures from the failed list — they are not
+            # grammar gaps and shouldn't be reported (or kept staged).
             : > /tmp/failed.txt
             while read -r f; do
               [[ -z "$f" ]] && continue
-              if [[ "$f" =~ [Kk]ql|[Kk]usto|[Pp]rql ]]; then
-                rm -f "$STAGED/${f}.sql"
-                continue
-              fi
-              if [[ -f "$STAGED/${f}.sql" ]] && \
-                 grep -qiE "dialect[[:space:]]*=[[:space:]]*'?(kusto|prql)" "$STAGED/${f}.sql"; then
+              if [[ -f "$STAGED/${f}.sql" ]] && out_of_scope "$STAGED/${f}.sql"; then
                 rm -f "$STAGED/${f}.sql"
                 continue
               fi

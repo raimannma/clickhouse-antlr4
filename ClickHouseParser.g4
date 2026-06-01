@@ -92,14 +92,14 @@ nonReservedKeyword
     | CLEANUP | CLEAR | CLIENT | CLONE | CLUSTER | CLUSTERS | CN | CODEC
     | COLLATE | COLLECTION | COLUMN | COLUMNS | COMMENT | COMMIT | COMPILED
     | COMPRESSION | CONDITION | CONFIG | CONNECTIONS | CONST | CONSTRAINT
-    | COPY | COVERAGE | CURRENT | CURRENTUSER | CURRENT_USER
+    | COPY | COVERAGE | CURRENT | CURRENTUSER | CURRENT_USER | CURSOR
     | D_KW | DATA | DATABASE | DATABASES | DATE | DAY | DAYS | DD | DDL | DIV | MOD
     | DOUBLE_SHA1_HASH | DOUBLE_SHA1_PASSWORD
     | DEALLOCATE | DEDUPLICATE | DEFAULT | DEFINER | DELAY | DELETED | DELTA
-    | DEPENDS | DESC | DESCENDING | DETACHED | DICTIONARIES | DICTIONARY
+    | DEPENDS | DESC | DESCENDING | DETACHED | DETERMINISTIC | DICTIONARIES | DICTIONARY
     | DISABLE | DISK | DISTINCT | DISTRIBUTED | DNS | DOW | DOY | DRY
     | EMBEDDED | EMPTY | ENABLE | ENABLED | END | ENFORCED | ENGINE | ENGINES
-    | EPHEMERAL | EPOCH | ESTIMATE | EVENT | EVENTS | EVERY | EXCEPT | EXCHANGE
+    | EPHEMERAL | EPOCH | ESCAPE | ESTIMATE | EVENT | EVENTS | EVERY | EXCEPT | EXCHANGE
     | EXECUTE | EXISTS | EXPLAIN | EXPRESSION | EXTENDED | EXTERNAL | EXTRACT
     | FAKE | FAILPOINT | FETCH | FETCHES | FIELDS | FILE | FILES | FILESYSTEM
     | FORMAT | FROM | FULL
@@ -147,7 +147,7 @@ nonReservedKeyword
     | RENAME | REPLACE | REPLICA | REPLICAS | REPLICATED | REPLICATION | RESET
     | RESOURCE | RESPECT | RESTART | RESTORE | RESTRICT | RESTRICTIVE | RESUME
     | RETURNS | REVOKE | REWRITE | ROLE | ROLES | ROLLBACK | ROW | ROWS | RUN
-    | S_KW | S3 | SALT | SAMPLE | SAN | SCHEDULE | SCHEMA | SCHEME | SEMI | SET
+    | S_KW | S3 | SALT | SAMPLE | SAMPLES | SAN | SCHEDULE | SCHEMA | SCHEME | SEMI | SET
     | SQL_TSI_NANOSECOND | SQL_TSI_MICROSECOND | SQL_TSI_MILLISECOND
     | SQL_TSI_SECOND | SQL_TSI_MINUTE | SQL_TSI_HOUR
     | SQL_TSI_DAY | SQL_TSI_WEEK | SQL_TSI_MONTH | SQL_TSI_QUARTER | SQL_TSI_YEAR
@@ -156,7 +156,7 @@ nonReservedKeyword
     | SHA256_HASH | SHA256_PASSWORD
     | SHARD | SHOW | SHUTDOWN | SIGNED | SIMILARITY | SIMPLE | SKIP_KW
     | SNAPSHOT | SOURCE | SPATIAL | SQL | SS | STALENESS | START | STATISTICS
-    | STDOUT | STEP | STOP | STORAGE | STRICT | SUBPARTITION | SUBPARTITIONS
+    | STDOUT | STEP | STOP | STORAGE | STREAM | STRICT | SUBPARTITION | SUBPARTITIONS
     | SUSPEND | SYNC | SYNTAX | SYSTEM
     | TABLE | TABLES | TAG | TAGS | TEMPORARY | TEST | TEXT | THAN | THREAD
     | TIES | TIME | TIMESTAMP | TO | TOKENS | TOP | TOTALS | TRACING | TRACKING
@@ -321,8 +321,10 @@ dataTypeArg
     | compoundIdentifier                              # dtaIdent
     ;
 
+// Enum element name is a string literal; ClickHouse also accepts the binary
+// and hex string-literal forms (b'...' / x'...') as the element name.
 enumElement
-    : STRING_LITERAL EQ (PLUS | MINUS)? NUMBER
+    : (STRING_LITERAL | BIN_STRING_LITERAL | HEX_STRING_LITERAL) EQ (PLUS | MINUS)? NUMBER
     ;
 
 // =============================================================================
@@ -340,6 +342,7 @@ expr
     | expr (PLUS | MINUS) expr                                                      # eeAdd              // (11)
     | expr CONCAT expr                                                              # eeConcat           // (10)
     | expr IS NOT? NULL_KW                                                          # eeIsNull           // (6)
+    | expr IS NOT? (TRUE | FALSE | UNKNOWN)                                         # eeIsBool           // (6) — IS [NOT] TRUE/FALSE/UNKNOWN
     | expr IS NOT? DISTINCT FROM expr                                               # eeDistinctFrom     // (6)
     | expr GLOBAL? NOT? IN expr                                                     # eeIn               // (9)
     | expr NOT? (LIKE | ILIKE | REGEXP | MATCH) expr                                # eeLike             // (9)
@@ -759,7 +762,7 @@ usingItem
 
 tableExpressionAtom
     : tableExpressionPrimary
-        (AS? identifier)?
+        (AS (identifier | SELECT) | identifier)?          // SELECT is a legal table alias only with explicit AS
         (LPAREN identifier (COMMA identifier)* RPAREN)?   // column-name alias list
         (FINAL)?
         sampleClause?
@@ -1062,8 +1065,9 @@ engineOption
     | WATERMARK expr                              // window-view: ENGINE = Memory WATERMARK toIntervalSecond(5)
     | UNIQUE KEY (LPAREN expr (COMMA expr)* RPAREN | expr)
     | settingsClause
-    // TimeSeries engine: ENGINE = TimeSeries DATA <t> TAGS <t> METRICS <t>
+    // TimeSeries engine: ENGINE = TimeSeries [DATA|SAMPLES] <t> TAGS <t> METRICS <t>
     | DATA identifier
+    | SAMPLES identifier
     | TAGS identifier
     | METRICS identifier
     ;
