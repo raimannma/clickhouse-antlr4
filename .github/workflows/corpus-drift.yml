@@ -85,8 +85,16 @@ jobs:
           else
             echo "all-pass=false" >> "$GITHUB_OUTPUT"
             # Separate passing from failing in the staged additions.
+            # CorpusRunner relativizes against tests/corpus, so each summary
+            # line reads "  FAIL stateless/<name>.sql" — there is NO "corpus/"
+            # segment. Strip the "  FAIL stateless/" prefix and ".sql" suffix to
+            # recover the bare <name> used to index into $STAGED below. (A stale
+            # ".*corpus/stateless/" pattern silently matched nothing, leaving the
+            # prefix in place so every later $STAGED/<name>.sql lookup missed —
+            # out_of_scope() never ran and the rm never fired.)
             grep '^  FAIL' /tmp/log.txt \
-              | sed 's|.*corpus/stateless/||;s|\.sql.*||' > /tmp/failed-all.txt || true
+              | sed -E 's|^[[:space:]]*FAIL[[:space:]]+stateless/||;s|\.sql.*$||' \
+              > /tmp/failed-all.txt || true
             # Drop out-of-scope fixtures from the failed list — they are not
             # grammar gaps and shouldn't be reported (or kept staged).
             : > /tmp/failed.txt
