@@ -134,12 +134,12 @@ nonReservedKeyword
     | PAGE | PARALLEL | PARQUET | PART | PARTIAL | PARTITION | PARTITIONS | PARTS | PASTE | PATCHES
     | PLAINTEXT_PASSWORD
     | PATH | PAUSE | PERIODIC | PERMANENTLY | PERMISSIVE | PERSISTENT
-    | PIPELINE | PLACING | PLAN | POLICY | POPULATE | POSTINGS | PRECEDING
+    | PIPELINE | PLACING | PLAN | POLICIES | POLICY | POPULATE | POSTINGS | PRECEDING
     | PREWHERE
     | PRECISION | PREFIX | PREPARE | PREWARM | PRIMARY | PRIORITY | PRIVILEGES
     | PROCESSLIST | PROFILE | PROFILES | PROJECTION | PROTOBUF | PULL | PULLING
     | PURGE
-    | Q_KW | QQ | QUARTER | QUARTERS | QUERIES | QUERY | QUEUE | QUEUES | QUOTA
+    | Q_KW | QQ | QUARTER | QUARTERS | QUERIES | QUERY | QUEUE | QUEUES | QUOTA | QUOTAS
     | RANDOMIZE | RANDOMIZED | RANGE | READ | READONLY | READY | REALM | REGEXP
     | RIGHT
     | ROLLUP | CUBE | RECURSIVE
@@ -1463,7 +1463,7 @@ systemTarget
 // =============================================================================
 
 showStatement
-    : SHOW CREATE (ROW | MASKING) accessEntitiesKeyword (settingsClause | formatClause | outfileClause)*  # showCreatePolicies
+    : SHOW CREATE (ROW | MASKING)? POLICIES (settingsClause | formatClause | outfileClause)*  # showCreatePolicies
     | SHOW CREATE TEMPORARY? (TABLE | VIEW | DICTIONARY | DATABASE | USER | ROLE | QUOTA | (ROW | MASKING)? POLICY | SETTINGS? PROFILE | NAMED COLLECTION | WORKLOAD | RESOURCE | FUNCTION)? showTarget (COMMA showTarget)* (settingsClause | formatClause | outfileClause)*  # showCreate
     | SHOW TABLE databaseAndTableName (settingsClause | formatClause)*        # showTable   // alias for SHOW CREATE TABLE
     | SHOW DATABASE databaseAndTableName (settingsClause | formatClause)*     # showDatabase // alias for SHOW CREATE DATABASE
@@ -1472,8 +1472,8 @@ showStatement
     | SHOW DATABASES showFilter? limitOptional? formatClause?                  # showDatabases
     | SHOW CLUSTERS showFilter? limitOptional? formatClause?                   # showClusters
     | SHOW CLUSTER STRING_LITERAL                                              # showCluster
-    | SHOW DICTIONARIES (FROM identifier)? showFilter? limitOptional? formatClause?  # showDictionaries
-    | SHOW (EXTENDED | FULL)? COLUMNS (FROM | IN) databaseAndTableName (FROM identifier)? showFilter? limitOptional?  # showColumns
+    | SHOW DICTIONARIES (FROM nameOrParam)? showFilter? limitOptional? formatClause?  # showDictionaries
+    | SHOW (EXTENDED | FULL)? (COLUMNS | FIELDS) (FROM | IN) databaseAndTableName (FROM nameOrParam)? showFilter? limitOptional?  # showColumns
     | SHOW (EXTENDED | FULL)? (INDEX | INDEXES | INDICES | KEYS) (FROM | IN) databaseAndTableName (FROM identifier)? showFilter?  # showIndexes
     | SHOW MERGES (FROM databaseAndTableName)? (WHERE expr)? limitOptional?    # showMerges
     | SHOW CHANGED? SETTINGS ((LIKE | ILIKE) STRING_LITERAL)? limitOptional?   # showSettings
@@ -1493,12 +1493,12 @@ showStatement
         (settingsClause | formatClause | outfileClause)*                       # showAccessEntities
     ;
 
-// Words used as access-entity list keywords — many (POLICIES, QUOTAS) are not
-// in CommonParsers.h as MR_MACROS keywords but are recognized by access-query
-// parsers (ParserShowAccessEntitiesQuery.cpp) via text match. We accept them
-// either as a declared keyword or a bare identifier.
+// Plural access-entity keywords accepted by ParserShowAccessEntitiesQuery.cpp.
+// POLICIES and QUOTAS are not MR_MACROS keywords upstream (matched there via
+// text compare); we tokenize them so this list is the exact valid set rather
+// than any identifier. The ROW / MASKING prefixes are handled by the caller.
 accessEntitiesKeyword
-    : USERS | ROLES | PROFILES | identifier
+    : USERS | ROLES | PROFILES | QUOTAS | POLICIES
     ;
 
 // Optional short-name filter on a SHOW ... <entities> list. Restricted to plain
