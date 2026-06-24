@@ -98,7 +98,7 @@ nonReservedKeyword
     | DEALLOCATE | DEDUPLICATE | DEFAULT | DEFINER | DELAY | DELETED | DELTA
     | DEPENDS | DESC | DESCENDING | DETACHED | DETERMINISTIC | DICTIONARIES | DICTIONARY
     | DISABLE | DISK | DISTINCT | DISTRIBUTED | DNS | DOW | DOY | DRY
-    | EMBEDDED | EMPTY | ENABLE | ENABLED | END | ENFORCED | ENGINE | ENGINES
+    | EMBEDDED | EMPTY | ENABLE | ENABLED | END | ENFORCED | ENGINE | ENGINES | ENUM
     | EPHEMERAL | EPOCH | ESCAPE | ESTIMATE | EVENT | EVENTS | EVERY | EXCEPT | EXCHANGE
     | EXECUTE | EXISTS | EXPLAIN | EXPRESSION | EXTENDED | EXTERNAL | EXTRACT
     | FAKE | FAILPOINT | FETCH | FETCHES | FIELDS | FILE | FILES | FILESYSTEM
@@ -108,13 +108,13 @@ nonReservedKeyword
     | FUZZER
     | GRANTEES | GRANTS | GRANULARITY | GROUPS
     | H_KW | HASH | HDFS | HEADER | HH | HIERARCHICAL | HOST | HOUR | HOURS
-    | HTTP
+    | HTTP | HYPOTHETICAL
     | GROUP | GROUPING
     | CHECK | COMMIT
     | ICEBERG | ID | IDENTIFIED | IF | IGNORE | ILIKE | IMPLICIT | IN | INDEX
     | INDEXES | INSERT | INTERVAL
     | INDICES | INFILE | INHERIT | INJECTIVE | INNER | INSTRUMENT | INTO
-    | INVISIBLE | INVOKER | IP | ISODOW | ISOYEAR
+    | INVISIBLE | INVOKER | IP | IPV4_PREFIX_BITS | IPV6_PREFIX_BITS | ISODOW | ISOYEAR
     | JEMALLOC | JOIN | JWT
     | KERBEROS | KERNEL | KEY | KEYED | KEYS | KILL | KIND
     | LANGUAGE | LARGE | LAST | LAYOUT | LDAP | LEADING | LEFT | LESS | LEVEL
@@ -144,7 +144,7 @@ nonReservedKeyword
     | RIGHT
     | ROLLUP | CUBE | RECURSIVE
     | RECOMPRESS | RECONNECT | REDUCE | REFERENCES | REFRESH | RELOAD | REMOVE
-    | RENAME | REPLACE | REPLICA | REPLICAS | REPLICATED | REPLICATION | RESET
+    | RENAME | REPLACE | REPLICA | REPLICAS | REPLICATED | REPLICATION | RESERVATION | RESET
     | RESOURCE | RESPECT | RESTART | RESTORE | RESTRICT | RESTRICTIVE | RESUME
     | RETURNS | REVOKE | REWRITE | ROLE | ROLES | ROLLBACK | ROW | ROWS | RUN
     | S_KW | S3 | SALT | SAMPLE | SAMPLES | SAN | SCHEDULE | SCHEMA | SCHEME | SEMI | SET
@@ -159,14 +159,14 @@ nonReservedKeyword
     | STDOUT | STEP | STOP | STORAGE | STREAM | STRICT | SUBPARTITION | SUBPARTITIONS
     | SUSPEND | SYNC | SYNTAX | SYSTEM
     | TABLE | TABLES | TAG | TAGS | TEMPORARY | TEST | TEXT | THAN | THREAD
-    | TIES | TIME | TIMESTAMP | TO | TOKENS | TOP | TOTALS | TRACING | TRACKING
+    | TIES | TIME | TIMESTAMP | TIMEZONE_HOUR | TIMEZONE_MINUTE | TO | TOKENS | TOP | TOTALS | TRACING | TRACKING
     | TRAILING | TRANSACTION | TREE | TRIGGER | TRUNCATE | TTL | TYPE | TYPEOF
     | UNBOUNDED | UNCOMPRESSED | UNDROP | UNFREEZE | UNION | UNIQUE | UNKNOWN | UNLOAD
     | UNLOCK | UNREADY | UNSET | UNSIGNED | UNTIL | UPDATE | URL | USER | USERS
     | UUID
     | VALID | VALUES | VARYING | VECTOR | VIEW | VIEWS | VIRTUAL | VISIBLE
     | VOLUME
-    | WAIT | WATCH | WATERMARK | WEEK | WEEKS | WINDOW | WK | WORKER | WORKLOAD
+    | WAIT | WATCH | WATERMARK | WEEK | WEEKS | WHATIF | WINDOW | WK | WORKER | WORKLOAD
     | WRITABLE | WRITE | WW
     | YEAR | YEARS | YY | YYYY
     | ZKPATH | ZONE | ZOOKEEPER
@@ -1463,7 +1463,8 @@ systemTarget
 // =============================================================================
 
 showStatement
-    : SHOW CREATE TEMPORARY? (TABLE | VIEW | DICTIONARY | DATABASE | USER | ROLE | QUOTA | ROW? POLICY | SETTINGS? PROFILE | NAMED COLLECTION | WORKLOAD | RESOURCE | FUNCTION)? showTarget (COMMA showTarget)* (settingsClause | formatClause)*  # showCreate
+    : SHOW CREATE (ROW | MASKING) accessEntitiesKeyword (settingsClause | formatClause | outfileClause)*  # showCreatePolicies
+    | SHOW CREATE TEMPORARY? (TABLE | VIEW | DICTIONARY | DATABASE | USER | ROLE | QUOTA | (ROW | MASKING)? POLICY | SETTINGS? PROFILE | NAMED COLLECTION | WORKLOAD | RESOURCE | FUNCTION)? showTarget (COMMA showTarget)* (settingsClause | formatClause | outfileClause)*  # showCreate
     | SHOW TABLE databaseAndTableName (settingsClause | formatClause)*        # showTable   // alias for SHOW CREATE TABLE
     | SHOW DATABASE databaseAndTableName (settingsClause | formatClause)*     # showDatabase // alias for SHOW CREATE DATABASE
     | SHOW TEMPORARY VIEW databaseAndTableName (settingsClause | formatClause)*  # showTemporaryView
@@ -1487,7 +1488,9 @@ showStatement
     | SHOW PRIVILEGES                                                          # showPrivileges
     | SHOW CURRENT ROLES                                                       # showCurrentRoles
     | SHOW ENABLED ROLES                                                       # showEnabledRoles
-    | SHOW ROW? accessEntitiesKeyword ((FROM | ON) databaseAndTableName)?      # showAccessEntities
+    | SHOW (ROW | MASKING)? accessEntitiesKeyword accessEntityShortName?
+        ((FROM | ON) databaseAndTableName)?
+        (settingsClause | formatClause | outfileClause)*                       # showAccessEntities
     ;
 
 // Words used as access-entity list keywords — many (POLICIES, QUOTAS) are not
@@ -1496,6 +1499,13 @@ showStatement
 // either as a declared keyword or a bare identifier.
 accessEntitiesKeyword
     : USERS | ROLES | PROFILES | identifier
+    ;
+
+// Optional short-name filter on a SHOW ... <entities> list. Restricted to plain
+// or backtick-quoted identifiers so a trailing FORMAT / SETTINGS / INTO OUTFILE
+// keyword is left for the output clause instead of being swallowed as the name.
+accessEntityShortName
+    : IDENT | QUOTED_IDENT
     ;
 
 showFilter
