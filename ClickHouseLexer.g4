@@ -112,6 +112,7 @@ ASSUME              : A S S U M E ;
 AST                 : A S T ;
 ASYNC               : A S Y N C ;
 ASYNCHRONOUS        : A S Y N C H R O N O U S ;
+AT_KW               : A T ;  // the word "AT"; AT is taken by the '@' symbol token
 ATTACH              : A T T A C H ;
 AUTHENTICATION      : A U T H E N T I C A T I O N ;
 AVRO                : A V R O ;
@@ -440,8 +441,10 @@ PIPELINE            : P I P E L I N E ;
 PLACING             : P L A C I N G ;
 PLAINTEXT_PASSWORD  : P L A I N T E X T '_' P A S S W O R D ;
 PLAN                : P L A N ;
+POINT               : P O I N T ;
 POLICIES            : P O L I C I E S ;
 POLICY              : P O L I C Y ;
+POLYGON             : P O L Y G O N ;
 POPULATE            : P O P U L A T E ;
 POSTINGS            : P O S T I N G S ;
 PRECEDING           : P R E C E D I N G ;
