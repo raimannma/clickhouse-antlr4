@@ -134,9 +134,24 @@ jobs:
             const fs = await import('node:fs/promises');
             const failing = (await fs.readFile('/tmp/failed.txt', 'utf8')).trim();
             const log = await fs.readFile('/tmp/log.txt', 'utf8');
+            const title = `Grammar gaps found in ${failing.split('\n').length} upstream fixtures`;
+            const body = `New stateless fixtures that don't parse with the current grammar:\n\n\`\`\`\n${failing}\n\`\`\`\n\n<details><summary>Runner output</summary>\n\n\`\`\`\n${log.slice(0, 60000)}\n\`\`\`\n\n</details>`;
+            // The gap set is usually the same week over week until someone
+            // fixes the grammar, so refresh the standing report instead of
+            // filing a near-identical issue on every run (cf. keyword-drift).
+            const { data } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'grammar-gap',
+            });
+            const existing = data.find(i => !i.pull_request);
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, title, body,
+              });
+              return;
+            }
             await github.rest.issues.create({
               owner: context.repo.owner, repo: context.repo.repo,
-              title: `Grammar gaps found in ${failing.split('\n').length} upstream fixtures`,
-              labels: ['corpus-drift', 'grammar-gap'],
-              body: `New stateless fixtures that don't parse with the current grammar:\n\n\`\`\`\n${failing}\n\`\`\`\n\n<details><summary>Runner output</summary>\n\n\`\`\`\n${log.slice(0, 60000)}\n\`\`\`\n\n</details>`,
+              title, labels: ['corpus-drift', 'grammar-gap'], body,
             });
