@@ -114,6 +114,14 @@ jobs:
           fi
           echo "added=$(wc -l < /tmp/new-candidates.txt)" >> "$GITHUB_OUTPUT"
           echo "failed=$([[ -f /tmp/failed.txt ]] && wc -l < /tmp/failed.txt || echo 0)" >> "$GITHUB_OUTPUT"
+      - name: Refresh the corpus size quoted in README
+        if: steps.triage.outputs.added != '0'
+        working-directory: clickhouse-antlr4
+        run: |
+          # Staging is now exactly the passing set, so the count is also the
+          # numerator. Left untouched if the sentence is ever reworded.
+          n=$(find tests/corpus/stateless -name '*.sql' | wc -l)
+          sed -i -E "s@^\*\*100% \([0-9]+/[0-9]+\)\*\*@**100% ($n/$n)**@" README.md
       - name: Open PR with new passing fixtures
         if: steps.triage.outputs.added != '0'
         uses: peter-evans/create-pull-request@v8
