@@ -66,7 +66,7 @@ U+2212 ("minus sign") is accepted wherever `-` is. Unicode smart quotes (U+2018/
 
 ## Status
 
-**100% (7961/7961)** of the ClickHouse upstream stateless test corpus (`ClickHouse/tests/queries/0_stateless/*.sql`) parses cleanly, after excluding:
+**100% (9521/9521)** of the ClickHouse upstream stateless test corpus (`ClickHouse/tests/queries/0_stateless/*.sql`) parses cleanly, after excluding:
 - Tests whose first-line directive explicitly expects a `clientError` / `serverError` on the reference parser (deliberate syntax-error fixtures).
 - KQL sub-dialect fixtures (`Parsers/Kusto/` — out of scope per the plan).
 - A small set of fuzzer-generated tests targeting lexer-level quirks documented below.
