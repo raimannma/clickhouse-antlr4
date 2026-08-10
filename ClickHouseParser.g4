@@ -85,7 +85,7 @@ nonReservedKeyword
     : ABI | ACCESS | ACTION | ADD | ADMIN | AFTER | ALGORITHM | ALIAS
     | ALL | ALLOCATE | ANALYZE | AND | ANTI | ANY | APPEND | APPLY | ARGUMENTS | ARRAY
     | AS | ASC | ASCENDING | ASOF | ASSUME | AST | ASYNC | ASYNCHRONOUS
-    | AT_KW | ATTACH | AUTHENTICATION | AVRO | AZURE
+    | AT_KW | ATTACH | AUTHENTICATION | AUTO_INCREMENT | AVRO | AZURE
     | BACKGROUND | BACKUP | BAGEXPANSION | BCRYPT_HASH | BCRYPT_PASSWORD | BEGIN
     | BIDIRECTIONAL | BINARY | BLOBS | BLOCKING | BOTH
     | CACHE | CACHES | CANCEL | CASCADE | CAST | CHANGE | CHANGED | CHAR | CHARACTER
@@ -111,7 +111,7 @@ nonReservedKeyword
     | HTTP | HYPOTHETICAL
     | GROUP | GROUPING
     | CHECK | COMMIT
-    | ICEBERG | ID | IDENTIFIED | IF | IGNORE | ILIKE | IMPLICIT | IN | INDEX
+    | ICEBERG | ID | IDENTIFIED | IDLE | IF | IGNORE | ILIKE | IMPLICIT | IN | INDEX
     | INDEXES | INSERT | INTERVAL
     | INDICES | INFILE | INHERIT | INJECTIVE | INNER | INSTRUMENT | INTO
     | INVISIBLE | INVOKER | IP | IPV4_PREFIX_BITS | IPV6_PREFIX_BITS | ISODOW | ISOYEAR
@@ -159,7 +159,7 @@ nonReservedKeyword
     | STDOUT | STEP | STOP | STORAGE | STREAM | STRICT | SUBPARTITION | SUBPARTITIONS
     | SUSPEND | SYNC | SYNTAX | SYSTEM
     | TABLE | TABLES | TAG | TAGS | TEMPORARY | TEST | TEXT | THAN | THREAD
-    | TIES | TIME | TIMESTAMP | TIMEZONE_HOUR | TIMEZONE_MINUTE | TO | TOKENS | TOP | TOTALS | TRACING | TRACKING
+    | TIES | TIME | TIMEOUT | TIMESTAMP | TIMEZONE_HOUR | TIMEZONE_MINUTE | TO | TOKENS | TOP | TOTALS | TRACING | TRACKING
     | TRAILING | TRANSACTION | TREE | TRIGGER | TRUNCATE | TTL | TYPE | TYPEOF
     | UNBOUNDED | UNCOMPRESSED | UNDROP | UNFREEZE | UNION | UNIQUE | UNKNOWN | UNLOAD
     | UNLOCK | UNREADY | UNSET | UNSIGNED | UNTIL | UPDATE | URL | USER | USERS
@@ -1065,11 +1065,20 @@ engineOption
     | WATERMARK expr                              // window-view: ENGINE = Memory WATERMARK toIntervalSecond(5)
     | UNIQUE KEY (LPAREN expr (COMMA expr)* RPAREN | expr)
     | settingsClause
-    // TimeSeries engine: ENGINE = TimeSeries [DATA|SAMPLES] <t> TAGS <t> METRICS <t>
-    | DATA identifier
-    | SAMPLES identifier
-    | TAGS identifier
-    | METRICS identifier
+    | timeSeriesTarget
+    ;
+
+// TimeSeries engine inner targets (ParserViewTargets.cpp): each target keyword
+// names an existing table, or defines the inner one by UUID, column list or
+// storage. An inner storage is itself an engineClause, so a trailing target of
+// the outer engine may be absorbed into it — accepted, but nested loosely.
+timeSeriesTarget
+    : (DATA | SAMPLES | TAGS | METRICS)
+      ( INNER UUID STRING_LITERAL
+      | INNER COLUMNS tableBody
+      | INNER? engineClause
+      | databaseAndTableName
+      )
     ;
 
 engineOrderBy
