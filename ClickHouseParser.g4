@@ -82,12 +82,12 @@ identifier
 // Keywords that ClickHouse accepts in identifier position. This set is the
 // practical floor — grown empirically from the test corpus.
 nonReservedKeyword
-    : ABI | ACCESS | ACTION | ADD | ADMIN | AFTER | ALGORITHM | ALIAS
+    : ABI | ACCESS | ACTION | ADD | ADMIN | AFTER | AGGREGATE | ALGORITHM | ALIAS
     | ALL | ALLOCATE | ANALYZE | AND | ANTI | ANY | APPEND | APPLY | ARGUMENTS | ARRAY
     | AS | ASC | ASCENDING | ASOF | ASSUME | AST | ASYNC | ASYNCHRONOUS
     | AT_KW | ATTACH | AUTHENTICATION | AUTO_INCREMENT | AVRO | AZURE
     | BACKGROUND | BACKUP | BAGEXPANSION | BCRYPT_HASH | BCRYPT_PASSWORD | BEGIN
-    | BIDIRECTIONAL | BINARY | BLOBS | BLOCKING | BOTH
+    | BIDIRECTIONAL | BINARY | BLOBS | BLOCKING | BOTH | BOUNDED
     | CACHE | CACHES | CANCEL | CASCADE | CAST | CHANGE | CHANGED | CHAR | CHARACTER
     | CLEANUP | CLEAR | CLIENT | CLONE | CLUSTER | CLUSTERS | CN | CODEC
     | COLLATE | COLLECTION | COLUMN | COLUMNS | COMMENT | COMMIT | COMPILED
@@ -100,14 +100,14 @@ nonReservedKeyword
     | DISABLE | DISK | DISTINCT | DISTRIBUTED | DNS | DOW | DOY | DRY
     | EMBEDDED | EMPTY | ENABLE | ENABLED | ENCRYPTION | END | ENFORCED | ENGINE | ENGINES | ENUM
     | EPHEMERAL | EPOCH | ESCAPE | ESTIMATE | EVENT | EVENTS | EVERY | EXCEPT | EXCHANGE
-    | EXECUTE | EXISTS | EXPLAIN | EXPRESSION | EXTENDED | EXTERNAL | EXTRACT
+    | EXECUTE | EXISTS | EXPLAIN | EXPRESSION | EXTEND | EXTENDED | EXTERNAL | EXTRACT
     | FAKE | FAILPOINT | FETCH | FETCHES | FIELDS | FILE | FILES | FILESYSTEM
     | FORMAT | FROM | FULL
     | FILL | FILTER | FINAL | FIRST | FLUSH | FOLLOWING | FOR | FORCE | FOREIGN
     | FORGET | FORMAT | FREE | FREEZE | FULL | FULLTEXT | FUNCTION | FUNCTIONS
     | FUZZER
     | GRANTEES | GRANTS | GRANULARITY | GROUPS
-    | H_KW | HASH | HDFS | HEADER | HEADERS | HH | HIERARCHICAL | HOST | HOUR | HOURS
+    | H_KW | HANDLER | HASH | HDFS | HEADER | HEADERS | HH | HIERARCHICAL | HOST | HOUR | HOURS
     | HTTP | HYPOTHETICAL
     | GROUP | GROUPING
     | CHECK | COMMIT
@@ -137,10 +137,10 @@ nonReservedKeyword
     | PIPELINE | PLACING | PLAN | POINT | POLICIES | POLICY | POLYGON | POPULATE | POSTINGS | PRECEDING
     | PREWHERE
     | PRECISION | PREFIX | PREPARE | PREWARM | PRIMARY | PRIORITY | PRIVILEGES
-    | PROCESSLIST | PROFILE | PROFILES | PROJECTION | PROTOBUF | PULL | PULLING
+    | PROCESSLIST | PROFILE | PROFILES | PROJECTION | PROTOBUF | PROTOCOL | PULL | PULLING
     | PURGE
     | Q_KW | QQ | QUARTER | QUARTERS | QUERIES | QUERY | QUEUE | QUEUES | QUOTA | QUOTAS
-    | RANDOMIZE | RANDOMIZED | RANGE | READ | READONLY | READY | REALM | REGEXP
+    | RANDOMIZE | RANDOMIZED | RANGE | READ | READONLY | READY | REALM | RECENT | REGEXP
     | RIGHT
     | ROLLUP | CUBE | RECURSIVE
     | RECOMPRESS | RECONNECT | REDUCE | REFERENCES | REFRESH | RELOAD | REMOVE
@@ -162,7 +162,7 @@ nonReservedKeyword
     | TIES | TIME | TIMEOUT | TIMESTAMP | TIMEZONE_HOUR | TIMEZONE_MINUTE | TO | TOKENS | TOP | TOTALS | TRACING | TRACKING
     | TRAILING | TRANSACTION | TREE | TRIGGER | TRUNCATE | TTL | TYPE | TYPEOF
     | UNBOUNDED | UNCOMPRESSED | UNDROP | UNFREEZE | UNION | UNIQUE | UNKNOWN | UNLOAD
-    | UNLOCK | UNREADY | UNSET | UNSIGNED | UNTIL | UPDATE | URL | USER | USERS
+    | UNLOCK | UNORDERED | UNREADY | UNSET | UNSIGNED | UNTIL | UPDATE | URL | USER | USERS
     | UUID
     | VALID | VALUES | VARYING | VECTOR | VIEW | VIEWS | VIRTUAL | VISIBLE
     | VOLUME
@@ -688,7 +688,17 @@ settingsClause
     ;
 
 settingAssignment
-    : identifier (EQ expr)?
+    : settingName (EQ expr)?
+    ;
+
+// Upstream reads the name with ParserCompoundIdentifier, which accepts any
+// bare word — reserved keywords included (`SETTINGS select = 'x', order = 'y'`).
+settingName
+    : identifier
+    | ALTER | BETWEEN | BY | CASE | CREATE | CROSS | DELETE | DESCRIBE | DETACH
+    | DROP | ELSE | FALSE | GLOBAL | GRANT | HAVING | INTERPOLATE | INTERSECT
+    | IS | NOT | ON | QUALIFY | SELECT | SOME | THEN | TRUE | USE | USING
+    | WHEN | WHERE | WITH
     ;
 
 formatClause
@@ -766,6 +776,19 @@ tableExpressionAtom
         (LPAREN identifier (COMMA identifier)* RPAREN)?   // column-name alias list
         (FINAL)?
         sampleClause?
+        streamClause?
+    ;
+
+// ParserStreamSettings.cpp. A bare `STREAM` is also a legal alias, which the
+// alias alternative above wins; acceptance is identical either way.
+streamClause
+    : STREAM BOUNDED? UNORDERED? (CURSOR cursorObject)?
+        (WATERMARK FOR identifier AS expr (IDLE TIMEOUT INTERVAL NUMBER intervalUnit)?)?
+    ;
+
+// Nested `{'key': int | {...}, ...}` object flattened into dotted paths upstream.
+cursorObject
+    : LBRACE (STRING_LITERAL COLON (NUMBER | cursorObject) (COMMA STRING_LITERAL COLON (NUMBER | cursorObject))*)? RBRACE
     ;
 
 tableExpressionPrimary
@@ -1073,7 +1096,7 @@ engineOption
 // storage. An inner storage is itself an engineClause, so a trailing target of
 // the outer engine may be absorbed into it — accepted, but nested loosely.
 timeSeriesTarget
-    : (DATA | SAMPLES | TAGS | METRICS)
+    : (DATA | SAMPLES | TAGS | METRICS | RECENT SAMPLES)
       ( INNER UUID STRING_LITERAL
       | INNER COLUMNS tableBody
       | INNER? engineClause
@@ -1261,6 +1284,8 @@ alterProjection
     : ADD PROJECTION ifNotExists? identifier LPAREN selectUnion RPAREN
         (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
         (AFTER identifier | FIRST)?
+    | MODIFY PROJECTION ifExists? identifier LPAREN selectUnion RPAREN
+        (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
     | DROP PROJECTION ifExists? identifier
     | CLEAR PROJECTION ifExists? identifier (IN PARTITION partitionKey)?
     | MATERIALIZE PROJECTION ifExists? identifier (IN PARTITION partitionKey)?
@@ -1742,7 +1767,7 @@ accessEntityKind
 // Loose grab-bag for the per-entity clauses; mirrors the extensive options in
 // ParserCreateUserQuery.cpp / ParserCreateRowPolicyQuery.cpp / etc.
 accessEntityBodyItem
-    : IDENTIFIED identifiedMethod (COMMA identifiedMethod)*
+    : ADD? IDENTIFIED identifiedMethod (COMMA identifiedMethod)*
     | IDENTIFIED
     | NOT IDENTIFIED
     | DEFAULT ROLE (identifier (COMMA identifier)* | NONE | ALL (EXCEPT identifier (COMMA identifier)*)?)
@@ -1750,7 +1775,7 @@ accessEntityBodyItem
     | (ADD | DROP)? HOST (ANY | NONE | hostSpec (COMMA hostSpec)*)
     | GRANTEES (ANY | NONE | identifier (COMMA identifier)* | EXCEPT identifier (COMMA identifier)*)
     | SETTINGS accessSettingItem (COMMA accessSettingItem)*
-    | VALID UNTIL STRING_LITERAL
+    | validClause
     | IN STRING_LITERAL
     | TO granteeList
     | FOR (SELECT | INSERT | UPDATE | DELETE | ALL)
@@ -1780,10 +1805,36 @@ hostSpec
 // clauses in any order, with subsequent BY-only entries reusing the previous
 // method name. We accept the union loosely.
 identifiedMethod
-    : WITH identifier (BY identifiedBy)? identifiedOption*
-    | BY identifiedBy identifiedOption*
-    | identifier (BY identifiedBy)? identifiedOption*
-    | sshKeyClause                          // SSH key auth: `KEY 'k' TYPE 't'`
+    : ( WITH authMethodName (BY identifiedBy)? identifiedOption*
+      | BY identifiedBy identifiedOption*
+      | authMethodName (BY identifiedBy)? identifiedOption*
+      | sshKeyClause                        // SSH key auth: `KEY 'k' TYPE 't'`
+      )
+      validClause? grantsClause?            // per-method deadline and privilege limit
+    ;
+
+// Before IDENTIFIED (or with no method) the deadline is user-level; after a
+// method it applies to that method only. VALID FOR takes an interval
+// expression (`INTERVAL 1 DAY + INTERVAL 12 HOUR`) resolved at execution time.
+validClause
+    : VALID UNTIL (STRING_LITERAL | queryParameter)
+    | VALID FOR expr
+    ;
+
+grantsClause
+    : GRANTS LPAREN grantPrivItem (COMMA grantPrivItem)* RPAREN
+    ;
+
+// The complete upstream AuthenticationType set (ParserCreateUserQuery.cpp).
+// A bare identifier here would let `IDENTIFIED WITH foobar` parse as valid.
+authMethodName
+    : NO_PASSWORD | NO_AUTHENTICATION
+    | PLAINTEXT_PASSWORD
+    | SHA256_PASSWORD | SHA256_HASH
+    | DOUBLE_SHA1_PASSWORD | DOUBLE_SHA1_HASH
+    | BCRYPT_PASSWORD | BCRYPT_HASH
+    | SCRAM_SHA256_PASSWORD | SCRAM_SHA256_HASH
+    | LDAP | KERBEROS | SSL_CERTIFICATE | SSH_KEY | HTTP | JWT
     ;
 
 // kerberos REALM 'x', ldap SERVER 'y', etc. — provider-specific auth options.
