@@ -34,15 +34,15 @@ jobs:
           UPSTREAM=../ClickHouse/tests/queries/0_stateless
 
           # Fixtures we never want in the corpus regardless of whether they parse:
-          # non-SQL sub-dialects (KQL/Kusto, PRQL) and deliberate parse-error
+          # non-SQL sub-dialects (KQL/Kusto, PRQL, Trino) and deliberate parse-error
           # negative tests. Used to gate what gets staged. Arg: path to the .sql.
           non_sql_or_error() {
             local p="$1" name
             name="$(basename "$p")"
             # Non-SQL sub-dialects — by filename ...
-            [[ "$name" =~ [Kk]ql|[Kk]usto|[Pp]rql ]] && return 0
+            [[ "$name" =~ [Kk]ql|[Kk]usto|[Pp]rql|[Tt]rino ]] && return 0
             # ... or by an explicit in-file dialect switch.
-            grep -qiE "dialect[[:space:]]*=[[:space:]]*'?(kusto|prql)" "$p" && return 0
+            grep -qiE "dialect[[:space:]]*=[[:space:]]*'?(kusto|prql|trino)" "$p" && return 0
             # Deliberate-error fixtures (negative tests).
             grep -qE '\{[[:space:]]*(clientError|serverError)' "$p" && return 0
             return 1

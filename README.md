@@ -4,7 +4,7 @@ An ANTLR4 grammar for the full ClickHouse SQL dialect, transcribed directly from
 
 The goal is a grammar that accepts every query `ParserQuery` / `ParserQueryWithOutput` accept, across SELECT / DML / DDL / SYSTEM / SHOW / EXPLAIN / access control / BACKUP / snapshots / workloads / named collections.
 
-Out of scope: sub-dialects under `Parsers/Kusto`, `Parsers/MySQL`, `Parsers/PRQL`, `Parsers/Polyglot`, `Parsers/Prometheus`.
+Out of scope: sub-dialects under `Parsers/Kusto`, `Parsers/MySQL`, `Parsers/PRQL`, `Parsers/Polyglot`, `Parsers/Prometheus`, `Parsers/Trino`.
 
 ## Files
 
@@ -66,9 +66,9 @@ U+2212 ("minus sign") is accepted wherever `-` is. Unicode smart quotes (U+2018/
 
 ## Status
 
-**100% (10758/10758)** of the ClickHouse upstream stateless test corpus (`ClickHouse/tests/queries/0_stateless/*.sql`) parses cleanly, after excluding:
+**100% (10796/10796)** of the ClickHouse upstream stateless test corpus (`ClickHouse/tests/queries/0_stateless/*.sql`) parses cleanly, after excluding:
 - Tests whose first-line directive explicitly expects a `clientError` / `serverError` on the reference parser (deliberate syntax-error fixtures).
-- KQL sub-dialect fixtures (`Parsers/Kusto/` — out of scope per the plan).
+- Sub-dialect fixtures (KQL/`Parsers/Kusto/`, PRQL, Trino — out of scope per the plan).
 - A small set of fuzzer-generated tests targeting lexer-level quirks documented below.
 
 ## Known limitations

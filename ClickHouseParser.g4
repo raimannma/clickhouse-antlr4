@@ -101,7 +101,7 @@ nonReservedKeyword
     | EMBEDDED | EMPTY | ENABLE | ENABLED | ENCRYPTION | END | ENFORCED | ENGINE | ENGINES | ENUM
     | EPHEMERAL | EPOCH | ESCAPE | ESTIMATE | EVENT | EVENTS | EVERY | EXCEPT | EXCHANGE
     | EXECUTE | EXISTS | EXPLAIN | EXPRESSION | EXTEND | EXTENDED | EXTERNAL | EXTRACT
-    | FAKE | FAILPOINT | FETCH | FETCHES | FIELDS | FILE | FILES | FILESYSTEM
+    | FAKE | FAILPOINT | FAILPOINTS | FAMILIES | FETCH | FETCHES | FIELDS | FILE | FILES | FILESYSTEM
     | FORMAT | FROM | FULL
     | FILL | FILTER | FINAL | FIRST | FLUSH | FOLLOWING | FOR | FORCE | FOREIGN
     | FORGET | FORMAT | FREE | FREEZE | FULL | FULLTEXT | FUNCTION | FUNCTIONS
@@ -111,7 +111,7 @@ nonReservedKeyword
     | HTTP | HYPOTHETICAL
     | GROUP | GROUPING
     | CHECK | COMMIT
-    | ICEBERG | ID | IDENTIFIED | IDLE | IF | IGNORE | ILIKE | IMPLICIT | IN | INDEX
+    | ICEBERG | ID | IDENTIFIED | IDLE | IF | IGNORE | ILIKE | IMPLICIT | IN | INCREMENTAL | INDEX
     | INDEXES | INSERT | INTERVAL
     | INDICES | INFILE | INHERIT | INJECTIVE | INNER | INSTRUMENT | INTO
     | INVISIBLE | INVOKER | IP | IPV4_PREFIX_BITS | IPV6_PREFIX_BITS | ISODOW | ISOYEAR
@@ -121,7 +121,7 @@ nonReservedKeyword
     | LIFETIME | LIGHTWEIGHT | LIKE | LIMIT | LIMITS | LINEAR | LIST | LISTEN | LIVE | LOAD
     | LOADING | LOCAL | LOG | LOGS
     | M_KW | MANIFEST | MARK | MASK | MASKING | MASTER | MATCH | MATERIALIZE | MATERIALIZED
-    | MAX | MCS | MEMORY | MERGE | MERGES | METADATA | METHODS | METRICS | MI
+    | MAX | MCS | MEMORY | MERGE | MERGES | METADATA | METHODS | METRIC | METRICS | MI
     | MICROSECOND | MICROSECONDS | MILLENNIUM | MILLISECOND | MILLISECONDS
     | MIN | MINUTE | MINUTES | MM | MMAP | MODEL | MODELS | MODIFY | MONTH
     | MONTHS | MOVE | MOVES | MS | MUTATION
@@ -137,7 +137,7 @@ nonReservedKeyword
     | PIPELINE | PLACING | PLAN | POINT | POLICIES | POLICY | POLYGON | POPULATE | POSTINGS | PRECEDING
     | PREWHERE
     | PRECISION | PREFIX | PREPARE | PREWARM | PRIMARY | PRIORITY | PRIVILEGES
-    | PROCESSLIST | PROFILE | PROFILES | PROJECTION | PROTOBUF | PROTOCOL | PULL | PULLING
+    | PROCESSLIST | PROFILE | PROFILES | PROJECTION | PROJECTIONS | PROTOBUF | PROTOCOL | PULL | PULLING
     | PURGE
     | Q_KW | QQ | QUARTER | QUARTERS | QUERIES | QUERY | QUEUE | QUEUES | QUOTA | QUOTAS
     | RANDOMIZE | RANDOMIZED | RANGE | READ | READONLY | READY | REALM | RECENT | REGEXP
@@ -152,14 +152,14 @@ nonReservedKeyword
     | SQL_TSI_SECOND | SQL_TSI_MINUTE | SQL_TSI_HOUR
     | SQL_TSI_DAY | SQL_TSI_WEEK | SQL_TSI_MONTH | SQL_TSI_QUARTER | SQL_TSI_YEAR
     | SCRAM_SHA256_HASH | SCRAM_SHA256_PASSWORD | SECOND | SECONDS
-    | SECURITY | SENDS | SEQUENTIAL | SERVER | SETS | SETTING | SETTINGS
+    | SECURITY | SENDS | SEQUENTIAL | SERIES | SERVER | SETS | SETTING | SETTINGS
     | SHA256_HASH | SHA256_PASSWORD
     | SHARD | SHOW | SHUTDOWN | SIGNED | SIMILARITY | SIMPLE | SKIP_KW
     | SNAPSHOT | SOURCE | SPATIAL | SQL | SS | STALENESS | START | STATISTICS
     | STDOUT | STEP | STOP | STORAGE | STREAM | STRICT | SUBPARTITION | SUBPARTITIONS
     | SUSPEND | SYNC | SYNTAX | SYSTEM
     | TABLE | TABLES | TAG | TAGS | TEMPORARY | TEST | TEXT | THAN | THREAD
-    | TIES | TIME | TIMEOUT | TIMESTAMP | TIMEZONE_HOUR | TIMEZONE_MINUTE | TO | TOKENS | TOP | TOTALS | TRACING | TRACKING
+    | TIES | TIME | TIMEOUT | TIMESTAMP | TIMEZONE_HOUR | TIMEZONE_MINUTE | TO | TOKEN | TOKENS | TOP | TOTALS | TRACING | TRACKING
     | TRAILING | TRANSACTION | TREE | TRIGGER | TRUNCATE | TTL | TYPE | TYPEOF
     | UNBOUNDED | UNCOMPRESSED | UNDROP | UNFREEZE | UNION | UNIQUE | UNKNOWN | UNLOAD
     | UNLOCK | UNORDERED | UNREADY | UNSET | UNSIGNED | UNTIL | UPDATE | URL | USER | USERS
@@ -345,6 +345,7 @@ expr
     | expr IS NOT? (TRUE | FALSE | UNKNOWN)                                         # eeIsBool           // (6) — IS [NOT] TRUE/FALSE/UNKNOWN
     | expr IS NOT? DISTINCT FROM expr                                               # eeDistinctFrom     // (6)
     | expr GLOBAL? NOT? IN expr                                                     # eeIn               // (9)
+    | expr NOT? (LIKE | ILIKE) expr ESCAPE STRING_LITERAL                           # eeLikeEscape       // (9) — `s LIKE p ESCAPE '!'`
     | expr NOT? (LIKE | ILIKE | REGEXP | MATCH) expr                                # eeLike             // (9)
     | expr (EQ | NE | LE | GE | LT | GT | SPACESHIP) (ANY | ALL | SOME)? expr       # eeCompare          // (9)
     | expr NOT? BETWEEN expr AND expr                                               # eeBetween          // (7)
@@ -371,10 +372,13 @@ primaryExpr
     | asteriskExpr                                              # peAsterisk
     | functionCall                                              # peFunctionCall
     | queryParameter                                            # peQueryParam
-    | LPAREN selectSubquery RPAREN                              # peSubquery
     | LPAREN arrayElementExpr COMMA (arrayElementExpr (COMMA arrayElementExpr)*)? COMMA? RPAREN  # peTuple   // includes 1-element (x,)
     | LPAREN expr AS identifier RPAREN                          # peParenAliased
     | LPAREN expr RPAREN                                        # peParen
+    // After the expression forms: `(from IN (1))` is both a column named `from`
+    // and the FROM-first subquery `(FROM in(1))`; upstream reads the column,
+    // and ANTLR resolves a true ambiguity to the lowest alternative.
+    | LPAREN selectSubquery RPAREN                              # peSubquery
     | LPAREN RPAREN                                             # peEmptyTuple
     | DOUBLE_AT identifier (DOT identifier)*                    # peMysqlGlobal   // @@session.foo
     | AT identifier                                             # peMysqlSession  // @user-variable
@@ -573,7 +577,7 @@ columnsRenameItem
 // =============================================================================
 
 selectUnion
-    : selectElement (selectUnionOp selectElement)* (settingsClause | outfileClause | formatClause)*
+    : selectElement (selectUnionOp selectElement)* pipeOperator* (settingsClause | outfileClause | formatClause)*
     ;
 
 selectUnionOp
@@ -587,14 +591,13 @@ selectElement
     | selectQuery
     ;
 
+// A query may start with its FROM clause, and then SELECT may be omitted
+// (`FROM t WHERE x` means `SELECT * FROM t WHERE x`).
 selectQuery
     : withClause?
-      (FROM tableExpression (COMMA tableExpression)*)?
-      SELECT
-        (ALL | DISTINCT (ON LPAREN expr (COMMA expr)* RPAREN)?)?
-        (TOP (LPAREN NUMBER RPAREN | NUMBER) (WITH TIES)?)?
-        selectItemList
-      (FROM tableExpression (COMMA tableExpression)*)?
+      ( FROM tableExpression (COMMA tableExpression)* (SELECT selectHead)?
+      | SELECT selectHead (FROM tableExpression (COMMA tableExpression)*)?
+      )
       (PREWHERE expr (AS identifier)?)?
       (WHERE expr (AS identifier)?)?
       groupByClause?
@@ -606,6 +609,34 @@ selectQuery
       limitClause?
       offsetFetchClause?
       (settingsClause | outfileClause | formatClause)*
+    ;
+
+selectHead
+    : (ALL | DISTINCT (ON LPAREN expr (COMMA expr)* RPAREN)?)?
+      (TOP (LPAREN NUMBER RPAREN | NUMBER) (WITH TIES)?)?
+      selectItemList
+    ;
+
+// Pipe operators (ParserPipeOperators.cpp): each one wraps the query so far
+// into `SELECT ... FROM (query)`. A set operation's operand list is written
+// in parentheses upstream when another operator follows; accepted loosely here.
+pipeOperator
+    : PIPE_OP
+      ( WHERE expr (AS identifier)?
+      | SELECT DISTINCT? selectItemList
+      | EXTEND selectItemList
+      | SET identifier EQ expr (COMMA identifier EQ expr)*
+      | DROP identifier (COMMA identifier)*
+      | AS identifier
+      | AGGREGATE selectItemList (GROUP BY selectItem (COMMA selectItem)*)?
+      | DISTINCT
+      | orderByClause
+      | LIMIT expr (OFFSET expr)?
+      | OFFSET expr
+      | selectUnionOp selectElement (COMMA selectElement)*
+      | joinElement+
+      )
+      settingsClause?
     ;
 
 withClause
@@ -674,7 +705,16 @@ limitByElement
     ;
 
 limitClause
-    : LIMIT expr (COMMA expr | OFFSET expr)? (WITH TIES)?
+    : LIMIT expr (COMMA expr | OFFSET expr)? (WITH TIES)? limitRange?
+    | LIMIT limitRange
+    ;
+
+// `AFTER start [ALL] [UNTIL end]` / `UNTIL end` (parseLimitRange in
+// ParserSelectQuery.cpp). AFTER and UNTIL stay non-reserved: `LIMIT after`
+// is still a count when no boundary expression follows.
+limitRange
+    : AFTER expr (AS identifier)? ALL? (UNTIL expr (AS identifier)?)?
+    | UNTIL expr (AS identifier)?
     ;
 
 offsetFetchClause
@@ -695,7 +735,13 @@ settingAssignment
 // bare word — reserved keywords included (`SETTINGS select = 'x', order = 'y'`).
 settingName
     : identifier
-    | ALTER | BETWEEN | BY | CASE | CREATE | CROSS | DELETE | DESCRIBE | DETACH
+    | reservedKeyword
+    ;
+
+// Reserved words (absent from nonReservedKeyword) that upstream still reads
+// as a bare name where a name is required (ParserIdentifier/CompoundIdentifier).
+reservedKeyword
+    : ALTER | BETWEEN | BY | CASE | CREATE | CROSS | DELETE | DESCRIBE | DETACH
     | DROP | ELSE | FALSE | GLOBAL | GRANT | HAVING | INTERPOLATE | INTERSECT
     | IS | NOT | ON | QUALIFY | SELECT | SOME | THEN | TRUE | USE | USING
     | WHEN | WHERE | WITH
@@ -767,7 +813,7 @@ joinConstraint
 
 // USING may alias columns inline: `USING (x AS y)`.
 usingItem
-    : identifier (AS identifier)?
+    : compoundIdentifier (AS identifier)?
     ;
 
 tableExpressionAtom
@@ -1040,7 +1086,7 @@ primaryKeyMarker
     ;
 
 indexDeclaration
-    : INDEX ifNotExists? identifier (LPAREN expr RPAREN | expr) (TYPE codecArg)? (GRANULARITY NUMBER)?
+    : INDEX ifNotExists? (identifier | reservedKeyword) (LPAREN expr RPAREN | expr) (TYPE codecArg)? (GRANULARITY NUMBER)?
     ;
 
 constraintDeclaration
@@ -1049,7 +1095,7 @@ constraintDeclaration
 
 projectionDeclaration
     : PROJECTION identifier
-        (INDEX (identifier | STAR) TYPE codecArg)?  // PROJECTION p INDEX (idx | *) TYPE t
+        (INDEX expr (COMMA expr)* TYPE codecArg)?  // PROJECTION p INDEX *, _part_offset TYPE t
         (LPAREN selectUnion RPAREN)?
         (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
     ;
@@ -1096,7 +1142,7 @@ engineOption
 // storage. An inner storage is itself an engineClause, so a trailing target of
 // the outer engine may be absorbed into it — accepted, but nested loosely.
 timeSeriesTarget
-    : (DATA | SAMPLES | TAGS | METRICS | RECENT SAMPLES)
+    : (DATA | SAMPLES | TAGS | METRICS | METRIC FAMILIES | RECENT SAMPLES)
       ( INNER UUID STRING_LITERAL
       | INNER COLUMNS tableBody
       | INNER? engineClause
@@ -1139,7 +1185,7 @@ refreshStrategy
         (OFFSET expr intervalUnit?)?
         (RANDOMIZE FOR expr intervalUnit?)?
         (DEPENDS ON refreshDependsList)?
-        APPEND?
+        (APPEND INCREMENTAL?)?
         (TO databaseAndTableName)?
         settingsClause?
     ;
@@ -1347,8 +1393,8 @@ partitionKey
     ;
 
 alterMutation
-    : UPDATE assignmentList (IN PARTITION partitionKey)? WHERE expr (IN PARTITION partitionKey)?
-    | DELETE (IN PARTITION partitionKey)? WHERE expr (IN PARTITION partitionKey)?
+    : UPDATE assignmentList (IN PARTITION partitionKey (COMMA partitionKey)*)? WHERE expr (IN PARTITION partitionKey)?
+    | DELETE (IN PARTITION partitionKey (COMMA partitionKey)*)? WHERE expr (IN PARTITION partitionKey)?
     ;
 
 alterCleanup
@@ -1388,7 +1434,7 @@ renameEntry
 truncateStatement
     : TRUNCATE TEMPORARY? TABLE? ifExists? databaseAndTableName onCluster?
         (PERMANENTLY | NO DELAY | SYNC | ASYNC)?
-        settingsClause?
+        (settingsClause | formatClause)*
     | TRUNCATE ALL? TABLES FROM ifExists? nameOrParam ((NOT)? LIKE STRING_LITERAL)? onCluster?
     | TRUNCATE DATABASE ifExists? (databaseAndTableName | nameOrParam) onCluster? (SYNC | ASYNC)? settingsClause?
     ;
