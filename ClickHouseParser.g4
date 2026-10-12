@@ -101,7 +101,7 @@ nonReservedKeyword
     | EMBEDDED | EMPTY | ENABLE | ENABLED | ENCRYPTION | END | ENFORCED | ENGINE | ENGINES | ENUM
     | EPHEMERAL | EPOCH | ESCAPE | ESTIMATE | EVENT | EVENTS | EVERY | EXCEPT | EXCHANGE
     | EXECUTE | EXISTS | EXPLAIN | EXPRESSION | EXTEND | EXTENDED | EXTERNAL | EXTRACT
-    | FAKE | FAILPOINT | FAILPOINTS | FAMILIES | FETCH | FETCHES | FIELDS | FILE | FILES | FILESYSTEM
+    | FAKE | FAILPOINT | FAILPOINTS | FAMILIES | FETCH | FETCHES | FIELDS | FILE | FILELOG | FILES | FILESYSTEM
     | FORMAT | FROM | FULL
     | FILL | FILTER | FINAL | FIRST | FLUSH | FOLLOWING | FOR | FORCE | FOREIGN
     | FORGET | FORMAT | FREE | FREEZE | FULL | FULLTEXT | FUNCTION | FUNCTIONS
@@ -117,7 +117,7 @@ nonReservedKeyword
     | INVISIBLE | INVOKER | IP | IPV4_PREFIX_BITS | IPV6_PREFIX_BITS | ISODOW | ISOYEAR
     | JEMALLOC | JOIN | JWT
     | KERBEROS | KERNEL | KEY | KEYED | KEYS | KILL | KIND
-    | LANGUAGE | LARGE | LAST | LAYOUT | LDAP | LEADING | LEFT | LESS | LEVEL
+    | LANGUAGE | LARGE | LAST | LATERAL | LAYOUT | LDAP | LEADING | LEFT | LESS | LEVEL
     | LIFETIME | LIGHTWEIGHT | LIKE | LIMIT | LIMITS | LINEAR | LIST | LISTEN | LIVE | LOAD
     | LOADING | LOCAL | LOG | LOGS
     | M_KW | MANIFEST | MARK | MASK | MASKING | MASTER | MATCH | MATERIALIZE | MATERIALIZED
@@ -154,7 +154,7 @@ nonReservedKeyword
     | SCRAM_SHA256_HASH | SCRAM_SHA256_PASSWORD | SECOND | SECONDS
     | SECURITY | SENDS | SEQUENTIAL | SERIES | SERVER | SETS | SETTING | SETTINGS
     | SHA256_HASH | SHA256_PASSWORD
-    | SHARD | SHOW | SHUTDOWN | SIGNED | SIMILARITY | SIMPLE | SKIP_KW
+    | SHARD | SHOW | SHUTDOWN | SIGNED | SIMILAR | SIMILARITY | SIMPLE | SKIP_KW
     | SNAPSHOT | SOURCE | SPATIAL | SQL | SS | STALENESS | START | STATISTICS
     | STDOUT | STEP | STOP | STORAGE | STREAM | STRICT | SUBPARTITION | SUBPARTITIONS
     | SUSPEND | SYNC | SYNTAX | SYSTEM
@@ -175,7 +175,7 @@ nonReservedKeyword
 // Compound identifier: dotted chain, each part is a simple identifier or a
 // quoted identifier. Used for column references (a.b.c), database.table, etc.
 compoundIdentifier
-    : identifier (DOT identifier)*
+    : identifier (DOT (identifier | reservedKeyword))*   // any word may follow a dot: `ab.by`
     ;
 
 // Qualified asterisk: table.* or db.table.* with optional COLUMNS-style
@@ -347,7 +347,9 @@ expr
     | expr GLOBAL? NOT? IN expr                                                     # eeIn               // (9)
     | expr NOT? (LIKE | ILIKE) expr ESCAPE STRING_LITERAL                           # eeLikeEscape       // (9) — `s LIKE p ESCAPE '!'`
     | expr NOT? (LIKE | ILIKE | REGEXP | MATCH) expr                                # eeLike             // (9)
+    | expr NOT? SIMILAR TO expr (ESCAPE STRING_LITERAL)?                            # eeSimilarTo        // (9) — SQL-standard regex match
     | expr (EQ | NE | LE | GE | LT | GT | SPACESHIP) (ANY | ALL | SOME)? expr       # eeCompare          // (9)
+    | expr PIPE expr                                                                # eeCompose          // (8) — `f(_) | g(_)` function composition
     | expr NOT? BETWEEN expr AND expr                                               # eeBetween          // (7)
     | NOT expr                                                                      # eeNot              // (5)
     | expr AND expr                                                                 # eeAnd              // (4)
@@ -549,11 +551,11 @@ columnsMatcher
 
 columnsMatcherBody
     : STRING_LITERAL
-    | identifier (COMMA identifier)*
+    | compoundIdentifier (COMMA compoundIdentifier)*
     ;
 
 columnsTransformer
-    : APPLY LPAREN (functionName (LPAREN functionArgList? RPAREN)? | expr) RPAREN (AS identifier)?
+    : APPLY LPAREN (functionName (LPAREN functionArgList? RPAREN)? | expr) (COMMA STRING_LITERAL)? RPAREN (AS identifier)?  // `, 'prefix_'` names the results
     | APPLY functionName (LPAREN functionArgList? RPAREN)? (AS identifier)?  // no outer parens
     | EXCEPT STRICT? LPAREN identifier (COMMA identifier)* RPAREN
     | EXCEPT STRICT? LPAREN STRING_LITERAL RPAREN
@@ -654,7 +656,7 @@ selectItemList
     ;
 
 selectItem
-    : expr (AS? identifier)?
+    : expr (AS (identifier | reservedKeyword) | identifier)?
     ;
 
 groupByClause
@@ -748,7 +750,7 @@ reservedKeyword
     ;
 
 formatClause
-    : FORMAT identifier
+    : FORMAT (identifier | NULL_KW)
     ;
 
 outfileClause
@@ -770,7 +772,7 @@ joinElement
     | crossJoinClause
     | pasteJoinClause
     | naturalJoinClause
-    | joinKind JOIN tableExpressionAtom joinConstraint? sampleClause?
+    | joinKind JOIN LATERAL? tableExpressionAtom joinConstraint? sampleClause?   // LATERAL (subquery); otherwise `lateral` is a table name
     | COMMA tableExpressionAtom              // implicit CROSS JOIN via comma
     ;
 
@@ -799,7 +801,7 @@ joinKind
           ANY | ALL | ASOF
         | SEMI | ANTI
         | (INNER | LEFT OUTER? | RIGHT OUTER? | FULL OUTER?)
-        | (LEFT OUTER? | RIGHT OUTER? | FULL OUTER?) (ANY | ALL | ASOF | SEMI | ANTI)
+        | (INNER | LEFT OUTER? | RIGHT OUTER? | FULL OUTER?) (ANY | ALL | ASOF | SEMI | ANTI)
         | (ANY | ALL | ASOF | SEMI | ANTI) (LEFT OUTER? | RIGHT OUTER? | FULL OUTER? | INNER)
       )?
     ;
@@ -818,7 +820,7 @@ usingItem
 
 tableExpressionAtom
     : tableExpressionPrimary
-        (AS (identifier | SELECT) | identifier)?          // SELECT is a legal table alias only with explicit AS
+        (AS (identifier | queryParameter | SELECT) | identifier)?  // SELECT is a legal table alias only with explicit AS
         (LPAREN identifier (COMMA identifier)* RPAREN)?   // column-name alias list
         (FINAL)?
         sampleClause?
@@ -882,12 +884,12 @@ partitionByClause
     ;
 
 insertBody
-    : VALUES (valuesRow (COMMA? valuesRow)* COMMA?)?   # ibValues
-    | selectUnion formatDataTail?                       # ibSelect
+    : VALUES (valuesItem (COMMA? valuesItem)* COMMA?)? # ibValues
+    | selectUnion (FORMAT identifier formatDataTail)?  # ibSelect   // inline data only for `... FROM input() FORMAT f <data>`
     | FORMAT identifier formatDataTail                  # ibFormatOnly
     | FROM INFILE STRING_LITERAL (COMPRESSION STRING_LITERAL)? settingsClause?
         ( FORMAT identifier formatDataTail?
-        | selectUnion formatDataTail?
+        | selectUnion (FORMAT identifier formatDataTail)?
         )?                                              # ibFromInfile
     ;
 
@@ -899,6 +901,13 @@ formatDataTail
 
 valuesRow
     : LPAREN (expr (COMMA expr)* COMMA?)? RPAREN
+    ;
+
+// The Values format, not the SQL parser, validates the rows, so a bare
+// literal (`VALUES 1`) still parses upstream and fails only at execution.
+valuesItem
+    : valuesRow
+    | literal
     ;
 
 // =============================================================================
@@ -968,6 +977,7 @@ createStatement
     | createDatabase
     | createDictionary
     | createIndex
+    | createHypothetical
     ;
 
 createOrReplace
@@ -1094,10 +1104,13 @@ constraintDeclaration
     ;
 
 projectionDeclaration
-    : PROJECTION identifier
-        (INDEX expr (COMMA expr)* TYPE codecArg)?  // PROJECTION p INDEX *, _part_offset TYPE t
-        (LPAREN selectUnion RPAREN)?
-        (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
+    : PROJECTION identifier projectionBody
+    ;
+
+projectionBody
+    : (INDEX expr (COMMA expr)* TYPE codecArg)?  // PROJECTION p INDEX *, _part_offset TYPE t
+      (LPAREN selectUnion RPAREN)?
+      (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
     ;
 
 primaryKeyDeclaration
@@ -1195,8 +1208,16 @@ refreshDependsList
     ;
 
 sqlSecurity
+    : sqlSecurityType definerClause?
+    | definerClause sqlSecurityType?
+    ;
+
+sqlSecurityType
     : SQL SECURITY (DEFINER | INVOKER | NONE)
-    | DEFINER EQ (identifier | STRING_LITERAL)
+    ;
+
+definerClause
+    : DEFINER EQ? (identifier | STRING_LITERAL)
     ;
 
 // --- CREATE DATABASE ----------------------------------------------------------
@@ -1269,10 +1290,19 @@ rangeArg
 // --- CREATE INDEX -------------------------------------------------------------
 
 createIndex
-    : CREATE UNIQUE? INDEX ifNotExists? identifier onCluster? ON databaseAndTableName
-        (LPAREN indexColumn (COMMA indexColumn)* RPAREN | expr)
+    : CREATE UNIQUE? INDEX ifNotExists? identifier onCluster? ON databaseAndTableName createIndexBody
+    ;
+
+createIndexBody
+    : (LPAREN indexColumn (COMMA indexColumn)* RPAREN | expr)
         (TYPE codecArg)?
         (GRANULARITY NUMBER)?
+    ;
+
+// Session-scoped what-if objects read by EXPLAIN WHATIF (ParserHypotheticalObjectQuery.cpp).
+createHypothetical
+    : CREATE HYPOTHETICAL INDEX ifNotExists? identifier ON databaseAndTableName createIndexBody
+    | CREATE HYPOTHETICAL PROJECTION ifNotExists? identifier ON databaseAndTableName projectionBody
     ;
 
 indexColumn
@@ -1327,8 +1357,7 @@ alterIndex
     ;
 
 alterProjection
-    : ADD PROJECTION ifNotExists? identifier LPAREN selectUnion RPAREN
-        (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
+    : ADD PROJECTION ifNotExists? identifier projectionBody
         (AFTER identifier | FIRST)?
     | MODIFY PROJECTION ifExists? identifier LPAREN selectUnion RPAREN
         (WITH SETTINGS LPAREN settingAssignment (COMMA settingAssignment)* RPAREN)?
@@ -1346,8 +1375,7 @@ alterConstraint
 alterStatistics
     : ADD STATISTICS ifNotExists? identifier (COMMA identifier)* TYPE codecArg (COMMA codecArg)*
     | DROP STATISTICS ifExists? identifier (COMMA identifier)*
-    | CLEAR STATISTICS ifExists? identifier (COMMA identifier)*
-    | MATERIALIZE STATISTICS ifExists? identifier (COMMA identifier)*
+    | (CLEAR | MATERIALIZE) STATISTICS (ALL | ifExists? identifier (COMMA identifier)* (IN PARTITION partitionKey)?)
     | MODIFY STATISTICS identifier (COMMA identifier)* TYPE codecArg (COMMA codecArg)*
     ;
 
@@ -1364,8 +1392,7 @@ alterTableLevel
     | RESET SETTING identifier (COMMA identifier)*
     | MODIFY COMMENT STRING_LITERAL
     | MODIFY DATABASE COMMENT STRING_LITERAL
-    | MODIFY DEFINER EQ (identifier | STRING_LITERAL)
-    | MODIFY SQL SECURITY (DEFINER | INVOKER | NONE)
+    | MODIFY sqlSecurity
     ;
 
 alterPartition
@@ -1401,7 +1428,7 @@ alterCleanup
     : CLEANUP
     | APPLY PATCHES (IN PARTITION partitionKey)?
     | APPLY DELETED MASK (IN PARTITION partitionKey)?
-    | REWRITE PARTS
+    | REWRITE PARTS (IN PARTITION partitionKey)?
     | EXECUTE identifier (LPAREN functionArgList? RPAREN)?  // e.g. ALTER TABLE t EXECUTE expire_snapshots('...')
     ;
 
@@ -1410,11 +1437,13 @@ alterCleanup
 // =============================================================================
 
 dropStatement
-    : DROP TEMPORARY? (TABLE | VIEW | DICTIONARY | DATABASE) ifExists?
+    : DROP TEMPORARY? (TABLE | VIEW | DICTIONARY | DATABASE) ifExists? (IF EMPTY)?
         databaseAndTableName (COMMA databaseAndTableName)* onCluster?
         (PERMANENTLY | NO DELAY | SYNC | ASYNC)?
         (settingsClause | formatClause)*
     | DROP INDEX ifExists? identifier onCluster? (ON databaseAndTableName)?
+    | DROP HYPOTHETICAL (INDEX | PROJECTION) ifExists? identifier ON databaseAndTableName
+    | DROP ALL HYPOTHETICAL (INDEXES | PROJECTIONS)
     ;
 
 undropStatement
@@ -1423,8 +1452,9 @@ undropStatement
 
 renameStatement
     : RENAME (TABLE | DICTIONARY | DATABASE)? ifExists?
-        renameEntry (COMMA renameEntry)* onCluster?
+        renameEntry (COMMA renameEntry)* onCluster? (settingsClause | formatClause)*
     | EXCHANGE (TABLES | DICTIONARIES) ifExists? databaseAndTableName AND databaseAndTableName onCluster?
+        (settingsClause | formatClause)*
     ;
 
 renameEntry
@@ -1470,7 +1500,7 @@ describeStatement
 
 existsStatement
     : EXISTS TEMPORARY? (TABLE | VIEW | DATABASE | DICTIONARY)?
-        databaseAndTableName
+        databaseAndTableName (settingsClause | formatClause)*
     ;
 
 // =============================================================================
@@ -1492,6 +1522,7 @@ systemSuffix
     | SET FAKE TIME STRING_LITERAL
     | UNSET FAKE TIME
     | WITH identifier+                            // SYSTEM START LISTEN TCP WITH PROXY
+    | FILE STRING_LITERAL (OFFSET NUMBER | TO END)?  // SYSTEM RESET FILELOG t FILE 'f' OFFSET n
     ;
 
 // SYSTEM commands. These are sequences of single-word keywords (from the
@@ -1549,17 +1580,17 @@ showStatement
     | SHOW TABLE databaseAndTableName (settingsClause | formatClause)*        # showTable   // alias for SHOW CREATE TABLE
     | SHOW DATABASE databaseAndTableName (settingsClause | formatClause)*     # showDatabase // alias for SHOW CREATE DATABASE
     | SHOW TEMPORARY VIEW databaseAndTableName (settingsClause | formatClause)*  # showTemporaryView
-    | SHOW FULL? TEMPORARY? TABLES (FROM databaseAndTableName | IN databaseAndTableName)? showFilter? limitOptional? formatClause?   # showTables
-    | SHOW DATABASES showFilter? limitOptional? formatClause?                  # showDatabases
-    | SHOW CLUSTERS showFilter? limitOptional? formatClause?                   # showClusters
-    | SHOW CLUSTER STRING_LITERAL                                              # showCluster
-    | SHOW DICTIONARIES (FROM nameOrParam)? showFilter? limitOptional? formatClause?  # showDictionaries
+    | SHOW FULL? TEMPORARY? TABLES (FROM databaseAndTableName | IN databaseAndTableName)? showFilter? limitOptional? (settingsClause | formatClause)*   # showTables
+    | SHOW FULL? DATABASES showFilter? limitOptional? (settingsClause | formatClause)*  # showDatabases
+    | SHOW FULL? CLUSTERS showFilter? limitOptional? (settingsClause | formatClause)*   # showClusters
+    | SHOW FULL? CLUSTER (STRING_LITERAL | identifier) (settingsClause | formatClause)*  # showCluster
+    | SHOW FULL? DICTIONARIES (FROM nameOrParam)? showFilter? limitOptional? (settingsClause | formatClause)*  # showDictionaries
     | SHOW (EXTENDED | FULL)? (COLUMNS | FIELDS) (FROM | IN) databaseAndTableName (FROM nameOrParam)? showFilter? limitOptional?  # showColumns
     | SHOW (EXTENDED | FULL)? (INDEX | INDEXES | INDICES | KEYS) (FROM | IN) databaseAndTableName (FROM identifier)? showFilter?  # showIndexes
-    | SHOW MERGES (FROM databaseAndTableName)? (WHERE expr)? limitOptional?    # showMerges
-    | SHOW CHANGED? SETTINGS ((LIKE | ILIKE) STRING_LITERAL)? limitOptional?   # showSettings
+    | SHOW FULL? MERGES (FROM databaseAndTableName)? showFilter? limitOptional? (settingsClause | formatClause)*  # showMerges
+    | SHOW FULL? CHANGED? SETTINGS ((LIKE | ILIKE) STRING_LITERAL)? limitOptional? (settingsClause | formatClause)*  # showSettings
     | SHOW SETTING identifier                                                  # showSetting
-    | SHOW FILESYSTEM CACHES                                                   # showFsCaches
+    | SHOW FULL? FILESYSTEM CACHES (settingsClause | formatClause)*            # showFsCaches
     | SHOW ENGINES                                                             # showEngines
     | SHOW FUNCTIONS showFilter? limitOptional?                                # showFunctions
     | SHOW PROCESSLIST showFilter? (WHERE expr)?                               # showProcesslist
@@ -1640,7 +1671,7 @@ explainKind
 killStatement
     : KILL (QUERY | MUTATION | TRANSACTION | PART_MOVE_TO_SHARD)? onCluster?
         (WHERE expr)? (SYNC | ASYNC | TEST)?
-        formatClause?
+        (settingsClause | formatClause)*
     ;
 
 // =============================================================================
@@ -1924,6 +1955,23 @@ createFunctionStatement
     : (CREATE | ATTACH) (OR REPLACE)? WASM? FUNCTION ifNotExists?
         identifier onCluster?
         AS (expr | STRING_LITERAL) settingsClause?
+    | (CREATE | ATTACH) (OR REPLACE)? FUNCTION ifNotExists?
+        identifier onCluster?
+        LANGUAGE (WASM | identifier) wasmFunctionClause* settingsClause?
+    ;
+
+wasmFunctionClause
+    : ARGUMENTS LPAREN (wasmArgument (COMMA wasmArgument)*)? RPAREN
+    | RETURNS dataType
+    | FROM STRING_LITERAL (DOUBLE_COLON STRING_LITERAL)?   // module [:: 'exported_name']
+    | SHA256_HASH STRING_LITERAL
+    | ABI identifier
+    | DETERMINISTIC
+    ;
+
+wasmArgument
+    : identifier dataType
+    | dataType
     ;
 
 dropFunctionStatement
