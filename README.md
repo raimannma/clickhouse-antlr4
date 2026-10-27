@@ -66,7 +66,7 @@ U+2212 ("minus sign") is accepted wherever `-` is. Unicode smart quotes (U+2018/
 
 ## Status
 
-**100% (11730/11730)** of the ClickHouse upstream stateless test corpus (`ClickHouse/tests/queries/0_stateless/*.sql`) parses cleanly, after excluding:
+**100% (11761/11761)** of the ClickHouse upstream stateless test corpus (`ClickHouse/tests/queries/0_stateless/*.sql`) parses cleanly, after excluding:
 - Tests whose first-line directive explicitly expects a `clientError` / `serverError` on the reference parser (deliberate syntax-error fixtures).
 - Sub-dialect fixtures (KQL/`Parsers/Kusto/`, PRQL, Trino, LogsQL, PromQL via `SET dialect` — out of scope per the plan).
 - A small set of fuzzer-generated tests targeting lexer-level quirks documented below.
@@ -74,7 +74,8 @@ U+2212 ("minus sign") is accepted wherever `-` is. Unicode smart quotes (U+2018/
 ## Known limitations
 
 - Heredoc tag equality is not enforced: `$tag$ ... $tag$` is accepted opaquely, with no check that the closing tag matches the opening one.
-- Raw format payloads following `INSERT ... FORMAT <format>` are consumed greedily, but rejected when the payload contains characters that don't form valid SQL tokens (stray backslashes, unmatched quotes, etc.). The reference parser stops tokenizing at `FORMAT`, and `clickhouse-client` ends the payload at the next blank line; we continue to EOF, so statements after such an INSERT in the same input are not checked.
+- Raw format payloads following `INSERT ... FORMAT <format>` are consumed greedily, but rejected when the payload contains characters that don't form valid SQL tokens (stray backslashes, unmatched quotes, etc.). The reference parser stops tokenizing at `FORMAT`, and `clickhouse-client` ends the payload at the next blank line; we continue to EOF, so statements after such an INSERT in the same input are not checked. A `;` directly after the format name ends the statement with no payload (`INSERT ... SELECT ... FORMAT TSV;`).
+- `codec Nullable(String)` (a column named `codec`) and `CODEC x (ZSTD(1))` (a codec declaration for column `x`) are the same tokens; upstream tells them apart by looking up codec names, and we always read the undotted form as a column. Dotted targets (`CODEC x.y (...)`) are codec declarations.
 - Exotic Unicode whitespace (U+180E Mongolian vowel separator and similar rare spaces) are not accepted as whitespace.
 - `EXPLAIN SYNTAX` output is not guaranteed round-trippable — function names that also happen to be keywords tokenize as keywords.
 - `SELECT` as an identifier (e.g. `FROM (...) AS select SELECT ...`) is not supported: modeling it would require making `SELECT` non-reserved, which breaks keyword handling broadly.
