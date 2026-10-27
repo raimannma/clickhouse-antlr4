@@ -140,13 +140,13 @@ nonReservedKeyword
     | PROCESSLIST | PROFILE | PROFILES | PROJECTION | PROJECTIONS | PROTOBUF | PROTOCOL | PULL | PULLING
     | PURGE
     | Q_KW | QQ | QUARTER | QUARTERS | QUERIES | QUERY | QUEUE | QUEUES | QUOTA | QUOTAS
-    | RANDOMIZE | RANDOMIZED | RANGE | READ | READONLY | READY | REALM | RECENT | REGEXP
+    | RANDOMIZE | RANDOMIZED | RANGE | RANGES | READ | READONLY | READY | REALM | RECENT | REGEXP
     | RIGHT
     | ROLLUP | CUBE | RECURSIVE
     | RECOMPRESS | RECONNECT | REDUCE | REFERENCES | REFRESH | RELOAD | REMOVE
     | RENAME | REPLACE | REPLICA | REPLICAS | REPLICATED | REPLICATION | RESERVATION | RESET
     | RESOURCE | RESPECT | RESTART | RESTORE | RESTRICT | RESTRICTIVE | RESUME
-    | RETURNS | REVOKE | REWRITE | ROLE | ROLES | ROLLBACK | ROW | ROWS | RUN | RUNNER
+    | RETURNING | RETURNS | REVOKE | REWRITE | ROLE | ROLES | ROLLBACK | ROW | ROWS | RUN | RUNNER
     | S_KW | S3 | SALT | SAMPLE | SAMPLES | SAN | SCHEDULE | SCHEMA | SCHEME | SEMI | SET
     | SQL_TSI_NANOSECOND | SQL_TSI_MICROSECOND | SQL_TSI_MILLISECOND
     | SQL_TSI_SECOND | SQL_TSI_MINUTE | SQL_TSI_HOUR
@@ -154,7 +154,7 @@ nonReservedKeyword
     | SCRAM_SHA256_HASH | SCRAM_SHA256_PASSWORD | SECOND | SECONDS
     | SECURITY | SENDS | SEQUENTIAL | SERIES | SERVER | SETS | SETTING | SETTINGS
     | SHA256_HASH | SHA256_PASSWORD
-    | SHARD | SHOW | SHUTDOWN | SIGNED | SIMILAR | SIMILARITY | SIMPLE | SKIP_KW
+    | SHARD | SHARED | SHOW | SHUTDOWN | SIGNED | SIMILAR | SIMILARITY | SIMPLE | SKIP_KW
     | SNAPSHOT | SOURCE | SPATIAL | SQL | SS | STALENESS | START | STATISTICS
     | STDOUT | STEP | STOP | STORAGE | STREAM | STRICT | SUBPARTITION | SUBPARTITIONS
     | SUSPEND | SYNC | SYNTAX | SYSTEM
@@ -314,6 +314,9 @@ dataTypeArg
     | identifier EQ (signedNumberLiteral | STRING_LITERAL)  # dtaNamedParam
     | compoundIdentifier dataType                     # dtaPathWithType
     | identifier dataType                             # dtaNameAndType
+    // JSON lazy type hint `SHARED some.path Type`. Listed after the plain-path
+    // forms: `shared DOUBLE PRECISION` is the path `shared`, as upstream decides.
+    | SHARED compoundIdentifier dataType              # dtaSharedPathWithType
     | functionCall                                    # dtaFuncCall
     | dataType                                        # dtaNestedType
     | signedNumberLiteral                             # dtaNumber
@@ -388,6 +391,9 @@ primaryExpr
     | (DATE | TIME | TIMESTAMP) STRING_LITERAL                  # peTypedLiteral // SQL-standard typed date/time literal
     | LBRACE (mapElement (COMMA mapElement)* COMMA?)? RBRACE    # peMap
     | compoundIdentifier                                        # peIdentifier
+    // `case` is a column when no CASE expression follows (`SELECT fn, case`);
+    // upstream tries ParserCase first and falls back to the identifier.
+    | CASE                                                      # peCaseIdentifier
     ;
 
 // Subquery shape allowed in primary expressions. Accepts either a SELECT
@@ -865,6 +871,7 @@ sampleRatio
 
 insertStatement
     : withClause? INSERT INTO (TABLE? FUNCTION | TABLE)? insertTarget insertColumns?
+        returningClause?
         partitionByClause?
         settingsClause?
         insertBody
@@ -879,6 +886,12 @@ insertColumns
     : LPAREN identifier (COMMA identifier)* RPAREN
     ;
 
+// `RETURNING (SELECT ...)` runs a query over the inserted rows. Upstream reads
+// it before the data, since everything after VALUES/FORMAT is data.
+returningClause
+    : RETURNING LPAREN selectUnion RPAREN
+    ;
+
 partitionByClause
     : PARTITION BY expr
     ;
@@ -888,15 +901,18 @@ insertBody
     | selectUnion (FORMAT identifier formatDataTail)?  # ibSelect   // inline data only for `... FROM input() FORMAT f <data>`
     | FORMAT identifier formatDataTail                  # ibFormatOnly
     | FROM INFILE STRING_LITERAL (COMPRESSION STRING_LITERAL)? settingsClause?
-        ( FORMAT identifier formatDataTail?
+        ( FORMAT identifier formatDataTail
         | selectUnion (FORMAT identifier formatDataTail)?
         )?                                              # ibFromInfile
     ;
 
 // Anything after `... FORMAT <name>` is raw data for the named format; we
-// consume every remaining token so the parser doesn't trip on it.
+// consume every remaining token so the parser doesn't trip on it. Data never
+// starts with `;`: upstream rejects that for inline-data INSERTs, and for
+// `INSERT ... SELECT ... FORMAT f;` (no input()) the `;` ends the statement,
+// which also keeps `EXPLAIN ... INSERT ... FORMAT f;` from eating the file.
 formatDataTail
-    : ( ~EOF )*
+    : ( ~(EOF | SEMICOLON) ( ~EOF )* )?
     ;
 
 valuesRow
@@ -1014,6 +1030,7 @@ tableBody
 
 tableElement
     : columnDeclaration
+    | codecDeclaration
     | indexDeclaration
     | constraintDeclaration
     | projectionDeclaration
@@ -1034,6 +1051,14 @@ columnDeclaration
          | columnSettingsClause
          | columnCompatAttr
         )*
+    ;
+
+// `CODEC col.sub (codecs)` sets the codec of a column or subcolumn
+// (ParserCodecDeclaration). Upstream reads an undotted `codec Nullable(String)`
+// as a column unless the parentheses name known codecs; the grammar cannot
+// see codec names, so that ambiguity resolves to columnDeclaration.
+codecDeclaration
+    : CODEC compoundIdentifier LPAREN codecArg (COMMA codecArg)* RPAREN
     ;
 
 // MySQL-compat column attributes that ClickHouse's parser tolerates
@@ -1155,7 +1180,7 @@ engineOption
 // storage. An inner storage is itself an engineClause, so a trailing target of
 // the outer engine may be absorbed into it — accepted, but nested loosely.
 timeSeriesTarget
-    : (DATA | SAMPLES | TAGS | METRICS | METRIC FAMILIES | RECENT SAMPLES)
+    : (DATA | SAMPLES | TAGS | METRICS | METRIC FAMILIES | RECENT SAMPLES | TIME RANGES)
       ( INNER UUID STRING_LITERAL
       | INNER COLUMNS tableBody
       | INNER? engineClause
@@ -1639,10 +1664,15 @@ limitOptional
 // EXPLAIN (ParserExplainQuery.cpp)
 // =============================================================================
 
+// The explained query may be parenthesized, with the EXPLAIN's own output
+// options after it: `EXPLAIN AST (INSERT INTO t SELECT 1) FORMAT TSV`.
+// `(SELECT 1)` alone stays a select, as upstream tries the query parser first.
 explainStatement
     : EXPLAIN explainKind?
         (settingsClause | explainSetting (COMMA explainSetting)*)?
-        statement?
+        ( statement
+        | LPAREN statement RPAREN (settingsClause | outfileClause | formatClause)*
+        )?
     ;
 
 // EXPLAIN can take bare key=value settings without the SETTINGS prefix
@@ -1847,6 +1877,7 @@ accessEntityBodyItem
     : ADD? IDENTIFIED identifiedMethod (COMMA identifiedMethod)*
     | IDENTIFIED
     | NOT IDENTIFIED
+    | RESET AUTHENTICATION METHODS TO NEW    // ALTER USER: keep only the most recently added method
     | DEFAULT ROLE (identifier (COMMA identifier)* | NONE | ALL (EXCEPT identifier (COMMA identifier)*)?)
     | DEFAULT DATABASE identifier
     | (ADD | DROP)? HOST (ANY | NONE | hostSpec (COMMA hostSpec)*)
