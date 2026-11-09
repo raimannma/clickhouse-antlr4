@@ -74,6 +74,15 @@ statement
 // =============================================================================
 
 identifier
+    : implicitAlias
+    | SHUFFLE
+    ;
+
+// A bare (no `AS`) alias after a table or select expression. Upstream refuses
+// these words as implicit aliases (ExpressionElementParsers.cpp restricted
+// keywords) because a clause starting with them may follow; `AS shuffle` and
+// `shuffle` as a column name stay legal through `identifier`.
+implicitAlias
     : IDENT
     | QUOTED_IDENT
     | nonReservedKeyword
@@ -612,7 +621,7 @@ selectQuery
       (HAVING expr (AS identifier)?)?
       windowClause?
       (QUALIFY expr)?
-      orderByClause?
+      (orderByClause | SHUFFLE)?        // SHUFFLE replaces ORDER BY (random row order)
       limitByClause?
       limitClause?
       offsetFetchClause?
@@ -662,7 +671,7 @@ selectItemList
     ;
 
 selectItem
-    : expr (AS (identifier | reservedKeyword) | identifier)?
+    : expr (AS (identifier | reservedKeyword) | implicitAlias)?
     ;
 
 groupByClause
@@ -826,7 +835,7 @@ usingItem
 
 tableExpressionAtom
     : tableExpressionPrimary
-        (AS (identifier | queryParameter | SELECT) | identifier)?  // SELECT is a legal table alias only with explicit AS
+        (AS (identifier | queryParameter | SELECT) | implicitAlias)?  // SELECT is a legal table alias only with explicit AS
         (LPAREN identifier (COMMA identifier)* RPAREN)?   // column-name alias list
         (FINAL)?
         sampleClause?
@@ -1219,13 +1228,17 @@ viewTargets
     ;
 
 refreshStrategy
-    : REFRESH (EVERY | AFTER) expr intervalUnit?
+    : REFRESH
+      ( (EVERY | AFTER) expr intervalUnit?
         (OFFSET expr intervalUnit?)?
         (RANDOMIZE FOR expr intervalUnit?)?
         (DEPENDS ON refreshDependsList)?
-        (APPEND INCREMENTAL?)?
-        (TO databaseAndTableName)?
-        settingsClause?
+      | DEPENDS ON refreshDependsList   // shorthand for AFTER 0 SECOND DEPENDS ON
+      )
+      settingsClause?                   // refresh SETTINGS come before APPEND upstream
+      (APPEND INCREMENTAL?)?
+      (TO databaseAndTableName)?
+      settingsClause?
     ;
 
 refreshDependsList

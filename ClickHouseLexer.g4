@@ -570,6 +570,7 @@ SHA256_PASSWORD     : S H A '2' '5' '6' '_' P A S S W O R D ;
 SHARD               : S H A R D ;
 SHARED              : S H A R E D ;
 SHOW                : S H O W ;
+SHUFFLE             : S H U F F L E ;
 SHUTDOWN            : S H U T D O W N ;
 SIGNED              : S I G N E D ;
 SIMILAR             : S I M I L A R ;
